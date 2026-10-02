@@ -867,6 +867,45 @@ def handle_carve(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_gui(args: argparse.Namespace) -> int:
+    """Launch the GUI application with PySide6 dependency verification."""
+    try:
+        import PySide6  # noqa: F401
+    except ImportError:
+        lang = getattr(args, "lang", None) or get_language()
+        if lang == "ru":
+            sys.stderr.write(
+                "Ошибка: Для работы графического интерфейса необходима библиотека PySide6.\n"
+                "Установите зависимости GUI с помощью команды:\n"
+                "    pip install photo-healer[gui]\n"
+                "или:\n"
+                "    pip install PySide6 pillow\n"
+            )
+        else:
+            sys.stderr.write(
+                "Error: GUI requires PySide6 and Pillow libraries.\n"
+                "Install GUI dependencies with:\n"
+                "    pip install photo-healer[gui]\n"
+                "or:\n"
+                "    pip install PySide6 pillow\n"
+            )
+        return 1
+
+    try:
+        from photo_healer.gui.app import main as gui_app_main
+    except ImportError as e:
+        sys.stderr.write(f"Error loading GUI modules: {e}\n")
+        return 1
+
+    gui_argv = ["photo-healer-gui"]
+    if getattr(args, "folder", None):
+        gui_argv.extend(["--folder", str(args.folder)])
+    if getattr(args, "lang", None):
+        gui_argv.extend(["--lang", str(args.lang)])
+
+    return gui_app_main(gui_argv)
+
+
 # ── CLI Parser Setup & Main ───────────────────────────────────────────────────
 def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     """Construct the top-level argument parser and subcommands with localized text."""
@@ -971,6 +1010,16 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_carve.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_carve.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
+    # 6. gui
+    p_gui = subparsers.add_parser(
+        "gui",
+        help=t("cmd.gui.help", lang=lang, default="Launch Photo Healer graphical desktop application"),
+        description=t("cmd.gui.desc", lang=lang, default="Launch the interactive desktop interface with diagnostics, recovery, and preview gallery."),
+    )
+    p_gui.add_argument("--folder", metavar="DIR", help=t("gui.arg.folder", lang=lang, default="Initial archive folder to open in GUI"))
+    p_gui.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
+    p_gui.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
+
     return parser
 
 
@@ -1023,6 +1072,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return handle_quarantine(args)
     elif args.command == "carve":
         return handle_carve(args)
+    elif args.command == "gui":
+        return handle_gui(args)
     else:
         parser.print_help()
         return 1

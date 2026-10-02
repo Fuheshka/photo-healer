@@ -15,6 +15,7 @@ dependencies = []
 
 [project.scripts]
 photo-healer = "photo_healer.cli.main:main"
+photo-healer-gui = "photo_healer.gui.app:main"
 
 
 [project.optional-dependencies]

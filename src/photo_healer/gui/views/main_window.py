@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from photo_healer.gui.i18n import get_language, i18n, set_language, t
 from photo_healer.gui.models.file_table_model import format_size
+from photo_healer.gui.views.carve_view import CarveView
 from photo_healer.gui.views.heal_view import HealView
 from photo_healer.gui.views.triage_view import TriageView
 from photo_healer.gui.workers.triage_worker import TriageWorker
@@ -214,7 +215,7 @@ QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal {
 class MainWindow(QMainWindow):
     """Main application window for Photo Healer forensic suite."""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, initial_folder: Path | str | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.worker: TriageWorker | None = None
         self._total_bytes: int = 0
@@ -230,6 +231,9 @@ class MainWindow(QMainWindow):
 
         self._init_ui()
         self._apply_styling()
+
+        if initial_folder:
+            self.set_folder(initial_folder)
 
         # Connect live reactive localization
         i18n.language_changed.connect(self._retranslate_ui)
@@ -297,12 +301,10 @@ class MainWindow(QMainWindow):
         self.recovery_tab = self.heal_view  # Retain attribute for backward compatibility
         self.tabs.addTab(self.heal_view, t("tab.recovery"))
 
-        # Tab 3: Preview Gallery (Placeholder / Info view)
-        self.gallery_tab = self._create_placeholder_tab(
-            "gallery.title",
-            "gallery.desc",
-        )
-        self.tabs.addTab(self.gallery_tab, t("tab.gallery"))
+        # Tab 3: Preview Gallery (Carve View)
+        self.carve_view = CarveView(self)
+        self.gallery_tab = self.carve_view
+        self.tabs.addTab(self.carve_view, t("tab.gallery"))
 
         # Double-click on candidate in triage switches to heal tab
         self.triage_view.table_view.doubleClicked.connect(self._on_triage_row_double_clicked)
@@ -397,6 +399,13 @@ class MainWindow(QMainWindow):
         if lang_code:
             set_language(lang_code)
 
+    def set_folder(self, folder_path: Path | str) -> None:
+        """Set the active archive folder programmatically."""
+        p = Path(folder_path)
+        if p.is_dir():
+            self.txt_folder.setText(str(p.resolve()))
+            self._on_folder_text_changed(str(p.resolve()))
+
     def _on_folder_text_changed(self, text: str) -> None:
         clean = text.strip().strip('"').strip("'")
         p = Path(clean) if clean else None
@@ -404,6 +413,7 @@ class MainWindow(QMainWindow):
             self._selected_path = p
             self.triage_view.set_archive_path(p)
             self.heal_view.set_archive_path(p)
+            self.carve_view.set_archive_path(p)
 
     def _on_triage_row_double_clicked(self, index) -> None:
         """Double click on triage table candidate jumps to heal tab."""
@@ -426,6 +436,7 @@ class MainWindow(QMainWindow):
             self._selected_path = Path(chosen)
             self.triage_view.set_archive_path(self._selected_path)
             self.heal_view.set_archive_path(self._selected_path)
+            self.carve_view.set_archive_path(self._selected_path)
 
     # ── Drag and Drop Support ─────────────────────────────────────────────────
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -448,6 +459,7 @@ class MainWindow(QMainWindow):
                         self._selected_path = path
                         self.triage_view.set_archive_path(path)
                         self.heal_view.set_archive_path(path)
+                        self.carve_view.set_archive_path(path)
                         event.acceptProposedAction()
                         return
         event.ignore()
