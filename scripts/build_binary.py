@@ -345,6 +345,11 @@ def create_release_archive(
     if license_file.is_file():
         files_to_pack.append((license_file, "LICENSE"))
 
+    for icon_subpath in ["assets/icon.ico", "assets/icon.png"]:
+        icon_path = project_root / icon_subpath
+        if icon_path.is_file():
+            files_to_pack.append((icon_path, icon_subpath))
+
     if checksums_file and checksums_file.is_file():
         files_to_pack.append((checksums_file, checksums_file.name))
 

@@ -14,6 +14,7 @@ from photo_healer.gui.i18n import (
     set_language,
     t,
 )
+from photo_healer.gui.icon import get_app_icon, get_app_icon_path
 from photo_healer.gui.models.file_table_model import (
     COLUMN_KEYS,
     STATUS_COLORS,
@@ -40,6 +41,8 @@ __all__ = [
     "i18n",
     "set_language",
     "t",
+    "get_app_icon",
+    "get_app_icon_path",
     "COLUMN_KEYS",
     "STATUS_COLORS",
     "FileFilterProxyModel",

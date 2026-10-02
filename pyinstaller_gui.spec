@@ -28,6 +28,7 @@ hidden_imports = [
     "photo_healer.gui",
     "photo_healer.gui.app",
     "photo_healer.gui.i18n",
+    "photo_healer.gui.icon",
     "photo_healer.gui.model",
     "photo_healer.gui.worker",
     "photo_healer.gui.models",
@@ -50,11 +51,14 @@ hidden_imports = [
     "PySide6.QtWidgets",
 ]
 
+icon_png = PROJECT_ROOT / "assets" / "icon.png"
+datas = [(str(icon_png), "assets")] if icon_png.is_file() else []
+
 a = Analysis(
     [str(PROJECT_ROOT / "src" / "photo_healer" / "gui" / "app.py")],
     pathex=[SRC_PATH],
     binaries=[],
-    datas=[],
+    datas=datas,
     hiddenimports=hidden_imports,
     hookspath=[],
     hooksconfig={},
@@ -141,4 +145,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
+    icon="assets/icon.ico",
 )

@@ -26,6 +26,7 @@ except ImportError:
 
 from photo_healer import __version__
 from photo_healer.gui.i18n import set_language
+from photo_healer.gui.icon import get_app_icon
 from photo_healer.gui.views.main_window import MainWindow
 
 
@@ -34,11 +35,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     if argv is None:
         argv = sys.argv
 
+    # Set Windows AppUserModelID so taskbar groups properly and displays custom icon
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("PhotoHealer.PhotoHealer.GUI")
+        except Exception:
+            pass
+
     # High DPI scaling is default in Qt 6, but ensuring crisp rendering
     app = QApplication(list(argv))
     app.setApplicationName("Photo Healer")
     app.setApplicationVersion(__version__)
     app.setOrganizationName("PhotoHealer")
+
+    # Set application window icon
+    app_icon = get_app_icon()
+    if not app_icon.isNull():
+        app.setWindowIcon(app_icon)
 
     # Set base dark palette
     palette = QPalette()

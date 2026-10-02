@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 )
 
 from photo_healer.gui.i18n import get_language, i18n, set_language, t
+from photo_healer.gui.icon import get_app_icon
 from photo_healer.gui.models.file_table_model import format_size
 from photo_healer.gui.views.carve_view import CarveView
 from photo_healer.gui.views.heal_view import HealView
@@ -225,6 +226,11 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(t("app.title"))
         self.resize(1080, 720)
         self.setMinimumSize(850, 520)
+
+        # Set window icon
+        app_icon = get_app_icon()
+        if not app_icon.isNull():
+            self.setWindowIcon(app_icon)
 
         # Enable Drag-and-Drop
         self.setAcceptDrops(True)
