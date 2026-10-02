@@ -10,6 +10,9 @@ triage_report.json
 heal_candidates.json
 heal_report.json
 *.bak
+_Previews/
+_Resync/
+
 
 # OS
 .DS_Store
