@@ -109,3 +109,51 @@ SANY0058.JPG → valid ✅  (FF D8 FF, 3 857 509 bytes, used as donor)
 | `quarantine.py` | Written — folder-structure-aware quarantine |
 | `README.md` | Written — full project documentation |
 | `implementation-notes.md` | This file |
+
+---
+
+## Prompt 2: Core Refactoring (photo_healer.core & TDD) (2026-10-02)
+
+### Goal
+Extract monolithic logic into a reusable, zero-heavy-dependency package `photo_healer.core` (ITU-T T.81 marker parser, dynamic Shannon entropy TRIM boundary detector, header splicer with double-EOI suppression, and structural validator), thoroughly tested via Red-Green-Refactor TDD.
+
+### Architecture & Module Breakdown
+
+```
+src/photo_healer/
+├── __init__.py
+└── core/
+    ├── __init__.py         # Exports JpegParser, Marker, EntropyAnalyzer, HeaderSplicer, SpliceResult, JpegValidator, ValidationResult
+    ├── parser.py           # JpegParser, Marker — strict ITU-T T.81 marker boundaries & EXIF APP1 payload isolation
+    ├── entropy.py          # EntropyAnalyzer — Shannon entropy & dynamic TRIM boundary detection (512B, 4KB, 64KB, fine)
+    ├── splicer.py          # HeaderSplicer, SpliceResult — donor header transplant, double-EOI guard, chunked streaming
+    └── validator.py        # JpegValidator, ValidationResult — JPEG marker validation, geometry extraction, EOI check
+```
+
+### Key Technical Decisions & Solutions
+
+1. **EXIF APP1 Payload Isolation (`JpegParser`):**
+   - **Challenge:** Camera files (e.g. SANYO, Canon, Sony) frequently embed full JPEG thumbnails within EXIF APP1 (`0xFF 0xE1`). A naive byte search for `0xFF 0xDA` (SOS) matches the thumbnail's scan header, truncating the donor header prematurely before DQT, SOF0, DHT, and the primary image's SOS.
+   - **Solution:** Sequential marker parser that strictly reads 16-bit big-endian length fields $L$ (which include the 2 length bytes themselves) and advances the stream pointer past the entire payload (`i += seg_len`). Marker caches avoid duplicate passes.
+
+2. **Dynamic Shannon Entropy Boundary Detector (`EntropyAnalyzer`):**
+   - **Challenge:** SSD TRIM block size varies by drive controller and OS: 512 bytes (legacy LBA), 4096 bytes (Advanced Format), or 65536 bytes (128 sectors). Stray NAND flash bit-flips in wiped sectors can fool naive non-zero checks.
+   - **Solution:** Canonical Shannon entropy calculation $H(X) = -\sum p_i \log_2(p_i)$. Zeroed sectors have $H = 0.0$, while compressed JPEG Huffman streams exhibit $H \ge 7.3$. A threshold of $H \ge 5.0$ and gradient check ($\Delta H \ge 3.0$) effectively rejects isolated noise bit-flips while detecting boundaries on arbitrary sector alignments or fine-grained offsets via dense sliding window analysis.
+
+3. **Single EOI Invariant & Memory-Efficient Streaming (`HeaderSplicer`):**
+   - **Challenge:** Candidates may either terminate with a surviving `0xFF 0xD9` or be truncated mid-scan. Splicing must ensure exactly one terminal EOI without duplicating it. Furthermore, multi-gigabyte files must not be buffered entirely into RAM.
+   - **Solution:** `splice_bytes()` and `splice_stream()` maintain a rolling 2-byte cross-chunk buffer to verify terminal bytes. If the live stream already ends in `\xff\xd9`, no EOI is appended; otherwise, `\xff\xd9` is written. Streaming operates in configurable chunks (default 64 KB).
+
+4. **Zero Heavy Dependencies (Ponytail Mode):**
+   - The entire core relies exclusively on Python standard library modules (`struct`, `math`, `io`, `pathlib`, `dataclasses`). `JpegValidator` uses structural stream inspection (SOI, DQT, DHT, SOF0/1/2 geometry, SOS, EOI), with optional dynamic import of Pillow for decoding verification if present in the environment.
+
+### Test Matrix & Verification
+
+- **Test suite:** `tests/test_parser.py`, `tests/test_entropy.py`, `tests/test_splicer.py`, `tests/test_validator.py`, and `tests/helpers.py`.
+- **Synthetic Test Kit (`JPEGTestKit`):** Pure-Python factory for generating RFC/ITU-compliant synthetic JPEG segments (DQT, DHT, SOF0, SOS, nested APP1 thumbnails with fake SOS markers, corrupt markers, DRI restart intervals, and fill-byte padding).
+- **Execution:** 45 tests, 100% pass rate in 0.14s:
+  - 13 entropy tests (pure zeros, random high entropy, 512/1024/4096/65536 sector sizes, fine offset 1023, stray flash noise, streams, file paths).
+  - 13 parser tests (normal donor, false SOS trap in EXIF APP1, 0xFF fill bytes, missing SOI/SOS, truncated lengths, DRI markers, streams, paths).
+  - 9 splicer tests (double EOI prevention, missing EOI addition, auto-entropy offset, stream vs memory parity, seekable stream check).
+  - 10 validator tests (healthy JPEG, non-JPEG, missing DQT/SOF, missing EOI, grayscale 1-component, trailing sector padding zeros, paths, streams).
+
