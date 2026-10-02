@@ -13,6 +13,10 @@ authors = [
 ]
 dependencies = []
 
+[project.scripts]
+photo-healer = "photo_healer.cli.main:main"
+
+
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0.0",
