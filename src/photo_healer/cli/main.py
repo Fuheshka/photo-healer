@@ -34,6 +34,11 @@ from photo_healer.cli.i18n import (
     set_language,
     t,
 )
+from photo_healer.cli.updater import (
+    check_and_notify_background,
+    check_for_updates,
+    format_update_notice,
+)
 
 # ── Windows Console UTF-8 Reconfiguration ─────────────────────────────────────
 ensure_windows_utf8()
@@ -906,6 +911,61 @@ def handle_gui(args: argparse.Namespace) -> int:
     return gui_app_main(gui_argv)
 
 
+def handle_update_check(args: argparse.Namespace) -> int:
+    """Handle explicit 'update-check' command."""
+    lang = getattr(args, "lang", None) or get_language()
+    quiet = getattr(args, "quiet", False)
+    force = getattr(args, "force", True)
+
+    if not quiet:
+        sys.stdout.write(t("updater.checking", default="Checking for updates...", lang=lang) + "\n")
+        sys.stdout.flush()
+
+    result = check_for_updates(
+        current_version=__version__,
+        force=force,
+        lang=lang,
+    )
+
+    if result.status == "update_available":
+        notice = format_update_notice(result, lang=lang)
+        if notice:
+            sys.stdout.write(notice)
+            sys.stdout.flush()
+        return 0
+    elif result.status == "up_to_date":
+        if not quiet:
+            msg = t(
+                "updater.up_to_date",
+                version=result.current_version,
+                default=f"You are running the latest version ({result.current_version}).",
+                lang=lang,
+            )
+            sys.stdout.write(msg + "\n")
+            sys.stdout.flush()
+        return 0
+    elif result.status == "throttled":
+        if not quiet:
+            msg = t(
+                "updater.throttled",
+                default="Update check skipped (checked within last 24 hours).",
+                lang=lang,
+            )
+            sys.stdout.write(msg + "\n")
+            sys.stdout.flush()
+        return 0
+    else:  # "error"
+        err_msg = t(
+            "updater.error",
+            error=result.error_message or "Unknown error",
+            default=f"Could not check for updates: {result.error_message}",
+            lang=lang,
+        )
+        sys.stderr.write(err_msg + "\n")
+        sys.stderr.flush()
+        return 1
+
+
 # ── CLI Parser Setup & Main ───────────────────────────────────────────────────
 def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     """Construct the top-level argument parser and subcommands with localized text."""
@@ -1020,6 +1080,17 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_gui.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
     p_gui.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
 
+    # 7. update-check
+    p_update = subparsers.add_parser(
+        "update-check",
+        help=t("cmd.update_check.help", lang=lang, default="Check for newer Photo Healer releases on GitHub"),
+        description=t("cmd.update_check.desc", lang=lang, default="Query GitHub Releases API to check if a new version is available."),
+    )
+    p_update.add_argument("--force", action="store_true", default=True, help=t("update_check.arg.force", lang=lang, default="Force check ignoring 24-hour cooldown"))
+    p_update.add_argument("--quiet", action="store_true", help=t("update_check.arg.quiet", lang=lang, default="Suppress output if up to date"))
+    p_update.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
+    p_update.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
+
     return parser
 
 
@@ -1062,21 +1133,30 @@ def main(argv: Sequence[str] | None = None) -> int:
     if not quiet and not no_banner:
         show_banner(version=__version__, lang=active_lang)
 
+    exit_code = 0
     if args.command == "triage":
-        return handle_triage(args)
+        exit_code = handle_triage(args)
     elif args.command == "heal":
-        return handle_heal(args)
+        exit_code = handle_heal(args)
     elif args.command == "batch-heal":
-        return handle_batch_heal(args)
+        exit_code = handle_batch_heal(args)
     elif args.command == "quarantine":
-        return handle_quarantine(args)
+        exit_code = handle_quarantine(args)
     elif args.command == "carve":
-        return handle_carve(args)
+        exit_code = handle_carve(args)
     elif args.command == "gui":
         return handle_gui(args)
+    elif args.command == "update-check":
+        return handle_update_check(args)
     else:
         parser.print_help()
         return 1
+
+    # Non-obtrusive background check for updates after command execution
+    if not quiet and args.command != "gui":
+        check_and_notify_background(lang=active_lang)
+
+    return exit_code
 
 
 if __name__ == "__main__":
