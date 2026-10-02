@@ -26,6 +26,7 @@ from photo_healer.core.entropy import EntropyAnalyzer
 from photo_healer.core.splicer import HeaderSplicer
 from photo_healer.core.validator import JpegValidator
 from photo_healer.core.carver import ThumbnailCarver, CarvedPreview
+from photo_healer.cli.banner import show_banner
 from photo_healer.cli.i18n import (
     SUPPORTED_LANGUAGES,
     ensure_windows_utf8,
@@ -880,6 +881,11 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
         help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru; default: system auto-detect)"),
     )
     parser.add_argument(
+        "--no-banner",
+        action="store_true",
+        help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"),
+    )
+    parser.add_argument(
         "--version",
         action="version",
         version=f"%(prog)s {__version__}",
@@ -901,6 +907,7 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_triage.add_argument("--dry-run", action="store_true", help=t("triage.arg.dry_run", lang=lang, default="Simulate quarantine without moving files"))
     p_triage.add_argument("--force", action="store_true", help=t("triage.arg.force", lang=lang, default="Overwrite existing files in quarantine destination"))
     p_triage.add_argument("--quiet", action="store_true", help=t("triage.arg.quiet", lang=lang, default="Suppress progress bars and summary tables"))
+    p_triage.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_triage.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 2. heal
@@ -916,6 +923,7 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_heal.add_argument("--force", action="store_true", help=t("heal.arg.force", lang=lang, default="Force overwrite existing destination or backup files"))
     p_heal.add_argument("--dry-run", action="store_true", help=t("heal.arg.dry_run", lang=lang, default="Simulate healing without writing to disk"))
     p_heal.add_argument("--quiet", action="store_true", help=t("heal.arg.quiet", lang=lang, default="Suppress progress and informational logs"))
+    p_heal.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_heal.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 3. batch-heal
@@ -932,6 +940,7 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_batch.add_argument("--force", action="store_true", help=t("batch_heal.arg.force", lang=lang, default="Force overwrite existing healed files or backups"))
     p_batch.add_argument("--dry-run", action="store_true", help=t("batch_heal.arg.dry_run", lang=lang, default="Simulate batch healing without writing files"))
     p_batch.add_argument("--quiet", action="store_true", help=t("batch_heal.arg.quiet", lang=lang, default="Suppress progress bars and summary output"))
+    p_batch.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_batch.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 4. quarantine
@@ -945,6 +954,7 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_quar.add_argument("--dry-run", action="store_true", help=t("quarantine.arg.dry_run", lang=lang, default="Simulate moves without moving files"))
     p_quar.add_argument("--force", action="store_true", help=t("quarantine.arg.force", lang=lang, default="Force overwrite if destination already exists"))
     p_quar.add_argument("--quiet", action="store_true", help=t("quarantine.arg.quiet", lang=lang, default="Suppress progress and summary output"))
+    p_quar.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_quar.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 5. carve
@@ -958,6 +968,7 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_carve.add_argument("--force", action="store_true", help=t("carve.arg.force", lang=lang, default="Force overwrite existing carved previews"))
     p_carve.add_argument("--dry-run", action="store_true", help=t("carve.arg.dry_run", lang=lang, default="Simulate extraction without writing files"))
     p_carve.add_argument("--quiet", action="store_true", help=t("carve.arg.quiet", lang=lang, default="Suppress progress and summary output"))
+    p_carve.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_carve.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     return parser
@@ -985,6 +996,8 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser = build_parser(lang=active_lang)
 
     if not argv:
+        if "--no-banner" not in sys.argv:
+            show_banner(version=__version__, lang=active_lang)
         parser.print_help()
         return 1
 
@@ -992,6 +1005,13 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if getattr(args, "lang", None):
         set_language(args.lang)
+        active_lang = args.lang
+
+    quiet = getattr(args, "quiet", False)
+    no_banner = getattr(args, "no_banner", False) or "--no-banner" in argv
+
+    if not quiet and not no_banner:
+        show_banner(version=__version__, lang=active_lang)
 
     if args.command == "triage":
         return handle_triage(args)
