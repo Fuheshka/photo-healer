@@ -3,7 +3,8 @@
 
 from __future__ import annotations
 
-from photo_healer.gui.views.triage_view import TriageView
+from photo_healer.gui.views.heal_view import HealView
 from photo_healer.gui.views.main_window import MainWindow
+from photo_healer.gui.views.triage_view import TriageView
 
-__all__ = ["TriageView", "MainWindow"]
+__all__ = ["TriageView", "MainWindow", "HealView"]

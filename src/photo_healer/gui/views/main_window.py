@@ -34,6 +34,7 @@ from PySide6.QtWidgets import (
 
 from photo_healer.gui.i18n import get_language, i18n, set_language, t
 from photo_healer.gui.models.file_table_model import format_size
+from photo_healer.gui.views.heal_view import HealView
 from photo_healer.gui.views.triage_view import TriageView
 from photo_healer.gui.workers.triage_worker import TriageWorker
 
@@ -291,12 +292,10 @@ class MainWindow(QMainWindow):
         self.triage_view = TriageView(self)
         self.tabs.addTab(self.triage_view, t("tab.diagnostics"))
 
-        # Tab 2: Recovery (Placeholder / Info view)
-        self.recovery_tab = self._create_placeholder_tab(
-            "recovery.title",
-            "recovery.desc",
-        )
-        self.tabs.addTab(self.recovery_tab, t("tab.recovery"))
+        # Tab 2: Recovery (Heal View)
+        self.heal_view = HealView(self)
+        self.recovery_tab = self.heal_view  # Retain attribute for backward compatibility
+        self.tabs.addTab(self.heal_view, t("tab.recovery"))
 
         # Tab 3: Preview Gallery (Placeholder / Info view)
         self.gallery_tab = self._create_placeholder_tab(
@@ -304,6 +303,9 @@ class MainWindow(QMainWindow):
             "gallery.desc",
         )
         self.tabs.addTab(self.gallery_tab, t("tab.gallery"))
+
+        # Double-click on candidate in triage switches to heal tab
+        self.triage_view.table_view.doubleClicked.connect(self._on_triage_row_double_clicked)
 
         root_layout.addWidget(self.tabs, 1)
 
@@ -401,6 +403,16 @@ class MainWindow(QMainWindow):
         if p and p.is_dir():
             self._selected_path = p
             self.triage_view.set_archive_path(p)
+            self.heal_view.set_archive_path(p)
+
+    def _on_triage_row_double_clicked(self, index) -> None:
+        """Double click on triage table candidate jumps to heal tab."""
+        source_index = self.triage_view.proxy_model.mapToSource(index)
+        row = source_index.row()
+        item = self.triage_view.table_model.get_item(row)
+        if item and item.get("status") == "healed_candidate":
+            self.heal_view.add_candidate(item["path"], select=True)
+            self.tabs.setCurrentIndex(1)
 
     def _browse_folder(self) -> None:
         default_dir = str(self._selected_path) if self._selected_path else ""
@@ -413,6 +425,7 @@ class MainWindow(QMainWindow):
             self.txt_folder.setText(chosen)
             self._selected_path = Path(chosen)
             self.triage_view.set_archive_path(self._selected_path)
+            self.heal_view.set_archive_path(self._selected_path)
 
     # ── Drag and Drop Support ─────────────────────────────────────────────────
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:
@@ -434,6 +447,7 @@ class MainWindow(QMainWindow):
                         self.txt_folder.setText(str(path))
                         self._selected_path = path
                         self.triage_view.set_archive_path(path)
+                        self.heal_view.set_archive_path(path)
                         event.acceptProposedAction()
                         return
         event.ignore()
@@ -463,6 +477,8 @@ class MainWindow(QMainWindow):
         self._selected_path = folder
         self.triage_view.set_archive_path(folder)
         self.triage_view.reset_data()
+        self.heal_view.set_archive_path(folder)
+        self.heal_view.clear_candidates()
 
         self._total_bytes = 0
         self._total_files = 0
@@ -508,6 +524,11 @@ class MainWindow(QMainWindow):
         self._total_files += 1
         self._total_bytes += record.get("size", 0)
         self.triage_view.add_file_record(record)
+        if record.get("status") == "healed_candidate":
+            self.heal_view.add_candidate(
+                record["path"],
+                select=(self.heal_view.current_candidate is None),
+            )
         self.lbl_metric_files.setText(t("metric.files", count=self._total_files))
         self.lbl_metric_size.setText(t("metric.total_size", size=format_size(self._total_bytes)))
 
