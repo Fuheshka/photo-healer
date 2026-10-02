@@ -24,3 +24,9 @@ desktop.ini
 .idea/
 .vscode/
 *.swp
+
+# PyInstaller & Build artifacts
+build/
+dist/
+*.spec.bak
+

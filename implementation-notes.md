@@ -673,3 +673,52 @@ src/photo_healer/
 - Автоматизированная проверка ссылок: все относительные ссылки в документах физически существуют и разрешаются.
 - Автоматизированная проверка таблиц и блоков кода: баланс Markdown-колон и кодовых блоков соблюден на 100%.
 - Проверка типографики: 0 длинных тире в русских текстах, 100% заголовков в Sentence case.
+
+## Prompt 8: Standalone Windows Binaries and PyInstaller Pipeline (2026-10-03)
+
+### Цель
+Автоматизация и сборка автономных исполняемых файлов `photo-healer.exe` (CLI) и `photo-healer-gui.exe` (GUI на PySide6) для Windows x64 с помощью PyInstaller для пользователей без установленного интерпретатора Python.
+
+### Архитектурные решения и компоненты
+1. **Спецификация CLI (`pyinstaller.spec`)**:
+   - Точка входа: `src/photo_healer/cli/main.py`.
+   - Режим: единый исполняемый файл (onefile, `photo-healer.exe`).
+   - Оптимизация размера по канонам Ponytail: строгое исключение тяжелых графических библиотек (`PySide6`, `shiboken6`, `PIL`/`Pillow`, `tkinter`), систем тестирования (`pytest`, `unittest`, `test`) и неиспользуемых серверных модулей (`xmlrpc`, `pydoc`).
+   - Итоговый размер бинарника: **8.09 МБ** (8 482 323 байт), что значительно ниже установленного лимита 15 МБ.
+
+2. **Спецификация GUI (`pyinstaller_gui.spec`)**:
+   - Точка входа: `src/photo_healer/gui/app.py`.
+   - Режим: единый оконный исполняемый файл (`console=False`, `photo-healer-gui.exe`).
+   - Ponytail-оптимизация Qt: включены только необходимые компоненты (`QtCore`, `QtGui`, `QtWidgets`, плагины `platforms/qwindows.dll`, `styles`, `imageformats`) и `Pillow` для высокоскоростного рендеринга срезов.
+   - Исключены неиспользуемые тяжелые подсистемы Qt: `QtWebEngineCore`, `QtWebEngineWidgets`, `QtQuick`, `QtQml`, `Qt3D*`, `QtMultimedia*`, `QtSensors`, `QtPositioning`, `QtSql`, `QtPdf` и др.
+   - Итоговый размер бинарника: **50.17 МБ** (52 604 547 байт), против стандартных 180+ МБ у неизбирательных сборок PySide6.
+
+3. **Скрипт автоматизированной сборки (`scripts/build_binary.py`)**:
+   - Zero-dependency реализация на стандартной библиотеке Python 3.11+ (`tomllib`, `hashlib`, `subprocess`, `zipfile`, `pathlib`).
+   - Автоматическая синхронизация номера версии напрямую из `pyproject.toml`.
+   - Безопасная очистка артефактов `build/` и `dist/` с защитой от блокировок дескрипторов Windows NTFS.
+   - Автоматическая переконфигурация потоков консоли Windows в UTF-8 (`sys.stdout.reconfigure(encoding="utf-8")`) с безопасным ASCII-фолбэком для совместимости с русскоязычными терминалами (CP1251 / CP866).
+   - Встроенный этап верификации:
+     - Проверка запуска `photo-healer.exe --version` (код 0, совпадение версии 0.2.0).
+     - Проверка запуска `photo-healer.exe triage --help` (код 0, наличие справки подкоманды).
+     - Проверка инициализации рантайма `photo-healer-gui.exe` (загрузка библиотек Qt и запуск оконной подсистемы без сбоев и отсутствующих DLL).
+   - Расчет контрольных сумм SHA-256 в файл `dist/checksums.txt`.
+   - Создание релизного zip-архива `photo-healer-v{version}-windows-x64.zip` со встроенными `photo-healer.exe`, `photo-healer-gui.exe`, `README.md`, `README.ru.md`, лицензией `LICENSE` и `checksums.txt`.
+   - Поддержка флагов `--cli-only`, `--gui-only`, `--skip-clean`, `--skip-tests`, `--skip-zip`, `--output-dir`.
+
+4. **Актуализация `.gitignore`**:
+   - Добавлены исключения для `build/`, `dist/`, `*.spec.bak`.
+
+5. **Соблюдение Scope Boundaries**:
+   - Исходный код в каталоге `src/` остался неизменным.
+
+### Верификация
+- Полный прогон `python scripts/build_binary.py`:
+  - `pyinstaller.spec` собран за 8.2s (размер 8.09 МБ, лимит < 15 МБ выполнен).
+  - `pyinstaller_gui.spec` собран за 51.0s (размер 50.17 МБ).
+  - CLI `--version` и `triage --help` успешно проверены.
+  - GUI рантайм успешно протестирован в изолированном каталоге `%TEMP%`.
+  - Сгенерирован `checksums.txt` с валидными SHA-256 суммами.
+  - Сформирован архив `photo-healer-v0.2.0-windows-x64.zip` (57.70 МБ).
+  - Проверена распаковка и запуск бинарников из готового zip-архива во временном каталоге.
+
