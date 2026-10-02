@@ -4,6 +4,7 @@ from photo_healer.core.parser import JpegParser, Marker
 from photo_healer.core.entropy import EntropyAnalyzer
 from photo_healer.core.splicer import HeaderSplicer, SpliceResult
 from photo_healer.core.validator import JpegValidator, ValidationResult
+from photo_healer.core.carver import ThumbnailCarver, CarvedPreview, RescueResult
 
 __all__ = [
     "JpegParser",
@@ -13,4 +14,8 @@ __all__ = [
     "SpliceResult",
     "JpegValidator",
     "ValidationResult",
+    "ThumbnailCarver",
+    "CarvedPreview",
+    "RescueResult",
 ]
+

@@ -157,3 +157,53 @@ src/photo_healer/
   - 9 splicer tests (double EOI prevention, missing EOI addition, auto-entropy offset, stream vs memory parity, seekable stream check).
   - 10 validator tests (healthy JPEG, non-JPEG, missing DQT/SOF, missing EOI, grayscale 1-component, trailing sector padding zeros, paths, streams).
 
+---
+
+## Prompt 1.4: Модуль извлечения превью (ThumbnailCarver) (2026-10-02)
+
+### Цель
+Реализовать модуль `src/photo_healer/core/carver.py` для поиска и безопасного извлечения встроенных превью (EXIF Thumbnail и полноразмерных превью высокого разрешения MPF/APP2) из частично поврежденных снимков, где основной поток изображения поврежден безвозвратно.
+
+### Архитектура и структура решения
+- **Модуль**: `src/photo_healer/core/carver.py` (реэкспорт в `photo_healer.core.__init__.py`).
+- **Датаклассы**:
+  - `CarvedPreview`: контейнер для извлеченного превью (`data`, `preview_type`, `width`, `height`, `size`, `source_offset`).
+  - `RescueResult`: результат работы режима спасения (`status`, `data`, `preview_type`, `saved_path`, `width`, `height`, `details`).
+- **Класс `ThumbnailCarver`**:
+  - `extract_exif_thumbnail(source)`: парсинг TIFF-заголовка в APP1 (с сигнатурой `Exif\x00\x00`), чтение IFD0 и IFD1, извлечение тегов `0x0201` (`JPEGInterchangeFormat`) и `0x0202` (`JPEGInterchangeFormatLength`). Поддержка порядков байт `II` (Little-Endian) и `MM` (Big-Endian).
+  - `extract_mpf_preview(source)`: поиск контейнеров Multi-Picture Format (CIPA DC-007) в APP2 (сигнатура `MPF\x00`), разбор MP Index IFD (теги `0xB001` `NumberOfImages` и `0xB002` `MPImageList`), извлечение вторичных кадров (Full HD 1920x1080 px и выше) с автоматическим выбором кадра с максимальным разрешением.
+  - `raw_stream_carve(source)`: сигнатурный поиск независимых потоков `FF D8 FF ... FF D9` с валидацией структуры маркеров (SOF/SOS) и пропуском байт-стаффинга `FF 00` и restart-маркеров `FF D0`..`FF D7` внутри энтропийного потока.
+  - `extract_best_preview(source)`: иерархический выбор наилучшего доступного превью (MPF Full HD > EXIF Thumbnail > Raw Carved).
+  - `fallback_rescue(source, donor_header, save, output_dir)`: автоматический режим спасения. Если донорская трансплантация невозможна из-за сильной деградации энтропии, модуль автоматически извлекает лучшее превью.
+  - `save_preview(source_path, preview_data, preview_type, output_dir)`: безопасное сохранение извлеченных миниатюр в подпапку `_Previews/` с суффиксами `_thumb.jpg` или `_preview.jpg` по правилам `careful` (исходный файл строго read-only).
+  - Дескриптор `_HybridMethod`: прозрачная поддержка вызовов как на уровне класса `ThumbnailCarver.extract_exif_thumbnail(...)`, так и через экземпляр `ThumbnailCarver().extract_exif_thumbnail(...)` или `ThumbnailCarver(source).extract_exif_thumbnail()`.
+
+### Ключевые технические решения и компромиссы
+1. **Полиморфные источники данных (Zero-Copy & Memory Safety):**
+   - Все методы принимают `str`, `Path`, `bytes`, `bytearray`, `io.BufferedIOBase`, `io.RawIOBase`.
+2. **Толерантность к повреждению первичных заголовков:**
+   - Поиск `Exif\x00\x00` и `MPF\x00` ведется сканированием по сигнатуре, поэтому превью успешно извлекаются, даже если заголовок SOI файла частично поврежден или занулен TRIM.
+3. **Безопасность данных (Careful Mode):**
+   - Исходные файлы архива никогда не открываются на запись. Все превью сохраняются в изолированную подпапку `_Previews/`.
+
+### Тестирование и верификация (TDD)
+- **Тестовый набор `tests/test_carver.py`**:
+  - `TestThumbnailCarverExif`: 5 тестов (Little-Endian, Big-Endian, IFD0 fallback, поврежденный заголовок, отсутствие APP1).
+  - `TestThumbnailCarverMpf`: 4 теста (Little-Endian, Big-Endian, выбор максимального разрешения при нескольких кадрах, отсутствие MPF).
+  - `TestThumbnailCarverRawStream`: 3 теста (независимые потоки, байт-стаффинг и RST-маркеры, чистые нули).
+  - `TestThumbnailCarverFallbackAndRescue`: 4 теста (приоритет MPF над EXIF, откат на EXIF, успешная трансплантация живой энтропии, спасение превью при мертвой энтропии).
+  - `TestThumbnailCarverSafeSaving`: 2 теста (сохранение в `_Previews/`, сохранение суффиксов `_thumb.jpg` и `_preview.jpg`, неизменность оригинала, проверка типов аргументов).
+- **Результат прогона тестов**:
+  - Всего в проекте: 63 теста, 100% passed за 0.22s.
+- **Прогон на реальных файлах архива (`E:\15407 DATA\!Problem\ВсеФотографии\`):**
+  - Смартфон `OPPO Find X7`:
+    - Извлечен EXIF Thumbnail: 30 338 байт, размер 180x240 px, верифицирован Pillow.
+    - Извлечен MPF Preview: 1 009 054 байт (~1 MB), Full HD / 3MP (1536x2048 px), верифицирован Pillow.
+  - Камера `SANYO 8MP` (`SANY0058.JPG`):
+    - Извлечен EXIF Thumbnail: 6 181 байт, размер 160x120 px, верифицирован Pillow.
+  - Поврежденный кадр камеры `SANY0015.JPG`:
+    - Проверена трансплантация через `fallback_rescue`: статус `transplanted`, восстановлен кадр 3264x2448 px, верифицирован Pillow.
+  - Симулированное тяжелое повреждение энтропии на снимке смартфона:
+    - `fallback_rescue(..., save=True)` автоматически спас кадр в `_Previews/oppo_corrupt_preview.jpg` (1536x2048 px, 1.0 MB), верифицирован Pillow.
+
+
