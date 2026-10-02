@@ -26,19 +26,16 @@ from photo_healer.core.entropy import EntropyAnalyzer
 from photo_healer.core.splicer import HeaderSplicer
 from photo_healer.core.validator import JpegValidator
 from photo_healer.core.carver import ThumbnailCarver, CarvedPreview
-
+from photo_healer.cli.i18n import (
+    SUPPORTED_LANGUAGES,
+    ensure_windows_utf8,
+    get_language,
+    set_language,
+    t,
+)
 
 # ── Windows Console UTF-8 Reconfiguration ─────────────────────────────────────
-if hasattr(sys.stdout, "reconfigure"):
-    try:
-        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-if hasattr(sys.stderr, "reconfigure"):
-    try:
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
+ensure_windows_utf8()
 
 
 # ── Constants & Formats ───────────────────────────────────────────────────────
@@ -179,13 +176,13 @@ def classify_file(path: Path) -> dict[str, Any]:
     try:
         size = path.stat().st_size
     except OSError as e:
-        result["note"] = f"Stat error: {e}"
+        result["note"] = t("classify.note.stat_error", error=e, default=f"Stat error: {e}")
         return result
 
     result["size"] = size
     if size == 0:
         result["status"] = "empty"
-        result["note"] = "Zero-length file"
+        result["note"] = t("classify.note.zero_length", default="Zero-length file")
         return result
 
     ext = path.suffix.lower()
@@ -207,14 +204,14 @@ def classify_file(path: Path) -> dict[str, Any]:
                     break
                 offset += len(chunk)
     except OSError as e:
-        result["note"] = f"Read error: {e}"
+        result["note"] = t("classify.note.read_error", error=e, default=f"Read error: {e}")
         return result
 
     result["first_nonzero"] = first_nz
 
     if first_nz == -1:
         result["status"] = "trim_zero"
-        result["note"] = f"100% TRIM-erased zeros ({format_size(size)})"
+        result["note"] = t("classify.note.trim_zero", size=format_size(size), default=f"100% TRIM-erased zeros ({format_size(size)})")
         return result
 
     if first_nz == 0:
@@ -224,20 +221,21 @@ def classify_file(path: Path) -> dict[str, Any]:
                     header = fh.read(len(expected_magic))
                 if header == expected_magic:
                     result["status"] = "valid"
-                    result["note"] = "Intact file magic"
+                    result["note"] = t("classify.note.intact_magic", default="Intact file magic")
                 else:
                     result["status"] = "other"
-                    result["note"] = f"Unexpected magic: {header[:8].hex(' ').upper()}"
+                    hex_str = header[:8].hex(" ").upper()
+                    result["note"] = t("classify.note.unexpected_magic", magic=hex_str, default=f"Unexpected magic: {hex_str}")
             except OSError as e:
-                result["note"] = f"Header read error: {e}"
+                result["note"] = t("classify.note.header_read_error", error=e, default=f"Header read error: {e}")
         else:
             result["status"] = "other"
-            result["note"] = f"Unknown magic for ext {ext}"
+            result["note"] = t("classify.note.unknown_magic", ext=ext, default=f"Unknown magic for ext {ext}")
         return result
 
     # first_nz > 0: zero-filled prefix with live trailing data
     result["status"] = "healed_candidate"
-    result["note"] = f"TRIM header zeroed ({first_nz} bytes), live stream starts at {first_nz}"
+    result["note"] = t("classify.note.trim_candidate", count=first_nz, offset=first_nz, default=f"TRIM header zeroed ({first_nz} bytes), live stream starts at {first_nz}")
     return result
 
 
@@ -273,7 +271,7 @@ def handle_triage(args: argparse.Namespace) -> int:
     """Execute triage scan and audit."""
     root = Path(args.path)
     if not root.is_dir():
-        sys.stderr.write(f"Error: Target path is not a directory: {root}\n")
+        sys.stderr.write(t("triage.error.not_a_directory", path=root, default=f"Error: Target path is not a directory: {root}") + "\n")
         return 1
 
     exts: set[str] = DEFAULT_EXTS
@@ -281,8 +279,8 @@ def handle_triage(args: argparse.Namespace) -> int:
         exts = {e.lower() if e.startswith(".") else f".{e.lower()}" for e in args.ext}
 
     if not args.quiet:
-        print(f"Scanning directory: {root.resolve()}")
-        print(f"Extensions filter : {', '.join(sorted(exts))}")
+        print(t("triage.info.scanning", path=root.resolve(), default=f"Scanning directory: {root.resolve()}"))
+        print(t("triage.info.ext_filter", exts=', '.join(sorted(exts)), default=f"Extensions filter : {', '.join(sorted(exts))}"))
 
     # Collect files
     file_list: list[Path] = []
@@ -293,7 +291,7 @@ def handle_triage(args: argparse.Namespace) -> int:
                 file_list.append(p)
 
     total_files = len(file_list)
-    progress = ProgressBar(total_files, prefix="Auditing files", quiet=args.quiet)
+    progress = ProgressBar(total_files, prefix=t("progress.auditing_files", default="Auditing files"), quiet=args.quiet)
 
     results: list[dict[str, Any]] = []
     counts: dict[str, int] = {}
@@ -317,7 +315,7 @@ def handle_triage(args: argparse.Namespace) -> int:
     if args.quarantine:
         q_dest = Path(args.quarantine)
         trim_zeros = [r for r in results if r["status"] == "trim_zero"]
-        q_progress = ProgressBar(len(trim_zeros), prefix="Quarantining", quiet=args.quiet)
+        q_progress = ProgressBar(len(trim_zeros), prefix=t("progress.quarantining", default="Quarantining"), quiet=args.quiet)
 
         if not args.dry_run:
             q_dest.mkdir(parents=True, exist_ok=True)
@@ -351,7 +349,7 @@ def handle_triage(args: argparse.Namespace) -> int:
                     moved_count += 1
                     moved_size += item["size"]
                 except OSError as e:
-                    sys.stderr.write(f"Warning: Failed moving {src.name}: {e}\n")
+                    sys.stderr.write(t("triage.warn.failed_move", name=src.name, error=e, default=f"Warning: Failed moving {src.name}: {e}") + "\n")
 
             q_progress.update(1, src.name)
 
@@ -360,22 +358,23 @@ def handle_triage(args: argparse.Namespace) -> int:
     # Print summary table
     if not args.quiet:
         table_rows = [
-            ["Valid / Intact photos", str(counts.get("valid", 0)), format_size(sizes.get("valid", 0))],
-            ["Heal candidates (live stream)", str(counts.get("healed_candidate", 0)), format_size(sizes.get("healed_candidate", 0))],
-            ["TRIM zero (erased 0x00)", str(counts.get("trim_zero", 0)), format_size(sizes.get("trim_zero", 0))],
-            ["Other formats / Unknown", str(counts.get("other", 0)), format_size(sizes.get("other", 0))],
-            ["Empty files (0 bytes)", str(counts.get("empty", 0)), "0 B"],
-            ["File access errors", str(counts.get("error", 0)), format_size(sizes.get("error", 0))],
+            [t("status.valid", default="Valid / Intact photos"), str(counts.get("valid", 0)), format_size(sizes.get("valid", 0))],
+            [t("status.healed_candidate", default="Heal candidates (live stream)"), str(counts.get("healed_candidate", 0)), format_size(sizes.get("healed_candidate", 0))],
+            [t("status.trim_zero", default="TRIM zero (erased 0x00)"), str(counts.get("trim_zero", 0)), format_size(sizes.get("trim_zero", 0))],
+            [t("status.other", default="Other formats / Unknown"), str(counts.get("other", 0)), format_size(sizes.get("other", 0))],
+            [t("status.empty", default="Empty files (0 bytes)"), str(counts.get("empty", 0)), "0 B"],
+            [t("status.error", default="File access errors"), str(counts.get("error", 0)), format_size(sizes.get("error", 0))],
         ]
         total_sz = sum(sizes.values())
-        table_rows.append(["Total scanned files", str(total_files), format_size(total_sz)])
+        table_rows.append([t("metric.total_scanned", default="Total scanned files"), str(total_files), format_size(total_sz)])
 
         if args.quarantine:
-            action_desc = "Quarantined (dry-run)" if args.dry_run else "Quarantined (moved)"
+            action_desc = t("metric.quarantined_dry_run", default="Quarantined (dry-run)") if args.dry_run else t("metric.quarantined_moved", default="Quarantined (moved)")
             table_rows.append([action_desc, str(moved_count), format_size(moved_size)])
-            table_rows.append(["Disk space freed", "-", format_size(moved_size)])
+            table_rows.append([t("metric.disk_freed", default="Disk space freed"), "-", format_size(moved_size)])
 
-        print(render_table("PHOTO HEALER — TRIAGE REPORT", ["Category / Status", "Files", "Size"], table_rows))
+        headers = [t("table.header.category_status", default="Category / Status"), t("table.header.files", default="Files"), t("table.header.size", default="Size")]
+        print(render_table(t("table.title.triage", default="PHOTO HEALER — TRIAGE REPORT"), headers, table_rows))
 
     # Save JSON report if requested
     if args.report:
@@ -384,7 +383,7 @@ def handle_triage(args: argparse.Namespace) -> int:
         with open(report_path, "w", encoding="utf-8") as fh:
             json.dump(results, fh, ensure_ascii=False, indent=2)
         if not args.quiet:
-            print(f"Report saved: {report_path.resolve()}")
+            print(t("triage.info.report_saved", path=report_path.resolve(), default=f"Report saved: {report_path.resolve()}"))
 
         # Also write heal candidates shortlist
         candidates = [r for r in results if r["status"] == "healed_candidate"]
@@ -393,7 +392,7 @@ def handle_triage(args: argparse.Namespace) -> int:
             with open(cand_path, "w", encoding="utf-8") as fh:
                 json.dump(candidates, fh, ensure_ascii=False, indent=2)
             if not args.quiet:
-                print(f"Heal candidates shortlist: {cand_path.resolve()} ({len(candidates)} items)")
+                print(t("triage.info.candidates_shortlist", path=cand_path.resolve(), count=len(candidates), default=f"Heal candidates shortlist: {cand_path.resolve()} ({len(candidates)} items)"))
 
     return 0
 
@@ -404,11 +403,11 @@ def handle_heal(args: argparse.Namespace) -> int:
     donor_path = Path(args.donor)
 
     if not broken_path.is_file():
-        sys.stderr.write(f"Error: Broken file does not exist: {broken_path}\n")
+        sys.stderr.write(t("heal.error.broken_not_found", path=broken_path, default=f"Error: Broken file does not exist: {broken_path}") + "\n")
         return 1
 
     if not donor_path.is_file():
-        sys.stderr.write(f"Error: Donor file does not exist: {donor_path}\n")
+        sys.stderr.write(t("heal.error.donor_not_found", path=donor_path, default=f"Error: Donor file does not exist: {donor_path}") + "\n")
         return 1
 
     # Careful protection: determine destination and check overwrite
@@ -416,17 +415,17 @@ def handle_heal(args: argparse.Namespace) -> int:
         out_path = broken_path
         bak_path = broken_path.with_suffix(broken_path.suffix + ".bak")
         if bak_path.exists() and not args.force:
-            sys.stderr.write(f"Error: Backup file already exists: {bak_path}. Use --force to overwrite.\n")
+            sys.stderr.write(t("heal.error.backup_exists", path=bak_path, default=f"Error: Backup file already exists: {bak_path}. Use --force to overwrite.") + "\n")
             return 1
     elif args.output:
         out_path = Path(args.output)
         if out_path.exists() and not args.force:
-            sys.stderr.write(f"Error: Destination file already exists: {out_path}. Use --force to overwrite.\n")
+            sys.stderr.write(t("heal.error.destination_exists", path=out_path, default=f"Error: Destination file already exists: {out_path}. Use --force to overwrite.") + "\n")
             return 1
     else:
         out_path = broken_path.parent / f"{broken_path.stem}_HEALED{broken_path.suffix}"
         if out_path.exists() and not args.force:
-            sys.stderr.write(f"Error: Destination file already exists: {out_path}. Use --force to overwrite.\n")
+            sys.stderr.write(t("heal.error.destination_exists", path=out_path, default=f"Error: Destination file already exists: {out_path}. Use --force to overwrite.") + "\n")
             return 1
 
     # Extract donor header
@@ -434,14 +433,14 @@ def handle_heal(args: argparse.Namespace) -> int:
         parser = JpegParser(donor_path)
         donor_header = parser.get_header_bytes()
     except Exception as e:
-        sys.stderr.write(f"Error: Failed to parse donor header from {donor_path.name}: {e}\n")
+        sys.stderr.write(t("heal.error.donor_parse_failed", name=donor_path.name, error=e, default=f"Error: Failed to parse donor header from {donor_path.name}: {e}") + "\n")
         return 1
 
     # Check broken target entropy stream
     try:
         broken_bytes = broken_path.read_bytes()
     except OSError as e:
-        sys.stderr.write(f"Error reading broken file: {e}\n")
+        sys.stderr.write(t("heal.error.broken_read_failed", error=e, default=f"Error reading broken file: {e}") + "\n")
         return 1
 
     detected_offset = EntropyAnalyzer.detect_entropy_start(broken_bytes)
@@ -450,7 +449,7 @@ def handle_heal(args: argparse.Namespace) -> int:
         if rec["first_nonzero"] > 0:
             detected_offset = rec["first_nonzero"]
         else:
-            sys.stderr.write(f"Error: No live entropy data found in {broken_path.name} (file is 100% TRIM-zero or corrupted).\n")
+            sys.stderr.write(t("heal.error.no_live_entropy", name=broken_path.name, default=f"Error: No live entropy data found in {broken_path.name} (file is 100% TRIM-zero or corrupted).") + "\n")
             return 1
 
     # Splice donor header with live bitstream
@@ -458,7 +457,7 @@ def handle_heal(args: argparse.Namespace) -> int:
         splicer = HeaderSplicer(donor_header)
         splice_res = splicer.splice_target(broken_bytes, entropy_offset=detected_offset)
     except Exception as e:
-        sys.stderr.write(f"Error splicing donor header: {e}\n")
+        sys.stderr.write(t("heal.error.splice_failed", error=e, default=f"Error splicing donor header: {e}") + "\n")
         return 1
 
     # Validate reconstructed image
@@ -466,11 +465,15 @@ def handle_heal(args: argparse.Namespace) -> int:
 
     if args.dry_run:
         if not args.quiet:
-            print(f"[DRY-RUN] Would heal: {broken_path.name} -> {out_path.name}")
-            print(f"  Donor header  : {len(donor_header)} bytes")
-            print(f"  Entropy start : offset {splice_res.entropy_offset}")
-            print(f"  Total size    : {format_size(splice_res.total_bytes)}")
-            print(f"  Valid JPEG    : {'Yes' if val.is_valid else 'No (warnings: ' + ', '.join(val.errors) + ')'}")
+            print(t("heal.dry_run.header", src=broken_path.name, dst=out_path.name, default=f"[DRY-RUN] Would heal: {broken_path.name} -> {out_path.name}"))
+            print(t("heal.dry_run.donor_header", size=len(donor_header), default=f"  Donor header  : {len(donor_header)} bytes"))
+            print(t("heal.dry_run.entropy_start", offset=splice_res.entropy_offset, default=f"  Entropy start : offset {splice_res.entropy_offset}"))
+            print(t("heal.dry_run.total_size", size=format_size(splice_res.total_bytes), default=f"  Total size    : {format_size(splice_res.total_bytes)}"))
+            if val.is_valid:
+                print(t("heal.dry_run.valid_jpeg_yes", default="  Valid JPEG    : Yes"))
+            else:
+                warn_str = ", ".join(val.errors)
+                print(t("heal.dry_run.valid_jpeg_no", warnings=warn_str, default=f"  Valid JPEG    : No (warnings: {warn_str})"))
         return 0
 
     # Write output
@@ -480,16 +483,16 @@ def handle_heal(args: argparse.Namespace) -> int:
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_bytes(splice_res.data)
     except OSError as e:
-        sys.stderr.write(f"Error writing output file: {e}\n")
+        sys.stderr.write(t("heal.error.write_failed", error=e, default=f"Error writing output file: {e}") + "\n")
         return 1
 
     if not args.quiet:
-        dim = f"{val.width}x{val.height}" if val.width and val.height else "unknown resolution"
-        print(f"[HEALED] {broken_path.name} -> {out_path.name}")
-        print(f"  Geometry   : {dim}")
-        print(f"  Total size : {format_size(splice_res.total_bytes)}")
+        dim = f"{val.width}x{val.height}" if val.width and val.height else t("heal.val.unknown_resolution", default="unknown resolution")
+        print(t("heal.success.header", src=broken_path.name, dst=out_path.name, default=f"[HEALED] {broken_path.name} -> {out_path.name}"))
+        print(t("heal.success.geometry", geometry=dim, default=f"  Geometry   : {dim}"))
+        print(t("heal.success.total_size", size=format_size(splice_res.total_bytes), default=f"  Total size : {format_size(splice_res.total_bytes)}"))
         if args.inplace:
-            print(f"  Backup     : {bak_path.name}")
+            print(t("heal.success.backup", name=bak_path.name, default=f"  Backup     : {bak_path.name}"))
 
     return 0
 
@@ -498,16 +501,16 @@ def handle_batch_heal(args: argparse.Namespace) -> int:
     """Execute batch healing for photo folders."""
     folder = Path(args.folder)
     if not folder.is_dir():
-        sys.stderr.write(f"Error: Folder does not exist: {folder}\n")
+        sys.stderr.write(t("batch_heal.error.folder_not_found", folder=folder, default=f"Error: Folder does not exist: {folder}") + "\n")
         return 1
 
     forced_donor = Path(args.donor) if args.donor else None
     if forced_donor and not forced_donor.is_file():
-        sys.stderr.write(f"Error: Specified donor file does not exist: {forced_donor}\n")
+        sys.stderr.write(t("batch_heal.error.donor_not_found", path=forced_donor, default=f"Error: Specified donor file does not exist: {forced_donor}") + "\n")
         return 1
 
     if not args.quiet:
-        print(f"Scanning for heal candidates in: {folder.resolve()}")
+        print(t("batch_heal.info.scanning", folder=folder.resolve(), default=f"Scanning for heal candidates in: {folder.resolve()}"))
 
     # Find candidates
     candidates: list[Path] = []
@@ -521,11 +524,11 @@ def handle_batch_heal(args: argparse.Namespace) -> int:
 
     if not candidates:
         if not args.quiet:
-            print(f"No damaged photo candidates found in {folder.resolve()}.")
+            print(t("batch_heal.info.no_candidates", folder=folder.resolve(), default=f"No damaged photo candidates found in {folder.resolve()}."))
         return 0
 
     if not args.quiet:
-        print(f"Found {len(candidates)} heal candidates. Starting batch restoration...")
+        print(t("batch_heal.info.found_candidates", count=len(candidates), default=f"Found {len(candidates)} heal candidates. Starting batch restoration..."))
 
     donor_header_cache: dict[Path, bytes] = {}
 
@@ -539,7 +542,7 @@ def handle_batch_heal(args: argparse.Namespace) -> int:
         except Exception:
             return None
 
-    progress = ProgressBar(len(candidates), prefix="Batch healing", quiet=args.quiet)
+    progress = ProgressBar(len(candidates), prefix=t("progress.batch_healing", default="Batch healing"), quiet=args.quiet)
 
     healed_count = 0
     skipped_count = 0
@@ -622,15 +625,16 @@ def handle_batch_heal(args: argparse.Namespace) -> int:
 
     # Summary table
     if not args.quiet:
-        action_name = "Healed (dry-run)" if args.dry_run else "Healed successfully"
+        action_name = t("metric.healed_dry_run", default="Healed (dry-run)") if args.dry_run else t("metric.healed_success", default="Healed successfully")
         table_rows = [
-            ["Total candidates", str(len(candidates)), "-"],
+            [t("metric.total_candidates", default="Total candidates"), str(len(candidates)), "-"],
             [action_name, str(healed_count), format_size(repaired_bytes)],
-            ["Skipped (no donor / file exists)", str(skipped_count), "-"],
-            ["Errors", str(error_count), "-"],
-            ["Total data restored", "-", format_size(repaired_bytes)],
+            [t("metric.skipped_no_donor_or_exists", default="Skipped (no donor / file exists)"), str(skipped_count), "-"],
+            [t("metric.errors", default="Errors"), str(error_count), "-"],
+            [t("metric.total_restored", default="Total data restored"), "-", format_size(repaired_bytes)],
         ]
-        print(render_table("PHOTO HEALER — BATCH HEAL SUMMARY", ["Metric", "Count", "Size"], table_rows))
+        headers = [t("table.header.metric", default="Metric"), t("table.header.count", default="Count"), t("table.header.size", default="Size")]
+        print(render_table(t("table.title.batch_heal", default="PHOTO HEALER — BATCH HEAL SUMMARY"), headers, table_rows))
 
     return 0
 
@@ -639,7 +643,7 @@ def handle_quarantine(args: argparse.Namespace) -> int:
     """Execute safe quarantine relocation from report."""
     report_file = Path(args.report)
     if not report_file.is_file():
-        sys.stderr.write(f"Error: Report file not found: {report_file}\n")
+        sys.stderr.write(t("quarantine.error.report_not_found", path=report_file, default=f"Error: Report file not found: {report_file}") + "\n")
         return 1
 
     dest_root = Path(args.dest)
@@ -647,7 +651,7 @@ def handle_quarantine(args: argparse.Namespace) -> int:
         with open(report_file, "r", encoding="utf-8") as fh:
             records: list[dict[str, Any]] = json.load(fh)
     except Exception as e:
-        sys.stderr.write(f"Error reading JSON report: {e}\n")
+        sys.stderr.write(t("quarantine.error.report_read_failed", error=e, default=f"Error reading JSON report: {e}") + "\n")
         return 1
 
     trim_zeros = [r for r in records if r.get("status") == "trim_zero"]
@@ -655,12 +659,12 @@ def handle_quarantine(args: argparse.Namespace) -> int:
 
     if total_items == 0:
         if not args.quiet:
-            print("No TRIM-zero files found in report.")
+            print(t("quarantine.info.no_trim_zeros", default="No TRIM-zero files found in report."))
         return 0
 
     if not args.quiet:
         total_size = sum(r.get("size", 0) for r in trim_zeros)
-        print(f"Found {total_items} TRIM-zero files ({format_size(total_size)}) to quarantine.")
+        print(t("quarantine.info.found_trim_zeros", count=total_items, size=format_size(total_size), default=f"Found {total_items} TRIM-zero files ({format_size(total_size)}) to quarantine."))
 
     # Determine common prefix root
     all_paths = [Path(r["path"]) for r in trim_zeros if "path" in r]
@@ -672,7 +676,7 @@ def handle_quarantine(args: argparse.Namespace) -> int:
     else:
         common_root = Path(".")
 
-    progress = ProgressBar(total_items, prefix="Quarantining", quiet=args.quiet)
+    progress = ProgressBar(total_items, prefix=t("progress.quarantining", default="Quarantining"), quiet=args.quiet)
 
     moved_count = 0
     skipped_count = 0
@@ -713,7 +717,7 @@ def handle_quarantine(args: argparse.Namespace) -> int:
                 moved_count += 1
                 freed_bytes += size
             except OSError as e:
-                sys.stderr.write(f"Warning: Failed to move {src.name}: {e}\n")
+                sys.stderr.write(t("quarantine.warn.failed_move", name=src.name, error=e, default=f"Warning: Failed to move {src.name}: {e}") + "\n")
                 error_count += 1
 
         progress.update(1, src.name)
@@ -722,15 +726,16 @@ def handle_quarantine(args: argparse.Namespace) -> int:
 
     # Summary table
     if not args.quiet:
-        action_name = "Relocated (dry-run)" if args.dry_run else "Relocated to quarantine"
+        action_name = t("metric.relocated_dry_run", default="Relocated (dry-run)") if args.dry_run else t("metric.relocated_moved", default="Relocated to quarantine")
         table_rows = [
-            ["Report items", str(total_items), "-"],
+            [t("metric.report_items", default="Report items"), str(total_items), "-"],
             [action_name, str(moved_count), format_size(freed_bytes)],
-            ["Skipped (missing / exists)", str(skipped_count), "-"],
-            ["Errors", str(error_count), "-"],
-            ["Disk space freed", "-", format_size(freed_bytes)],
+            [t("metric.skipped_missing_or_exists", default="Skipped (missing / exists)"), str(skipped_count), "-"],
+            [t("metric.errors", default="Errors"), str(error_count), "-"],
+            [t("metric.disk_freed", default="Disk space freed"), "-", format_size(freed_bytes)],
         ]
-        print(render_table("PHOTO HEALER — QUARANTINE SUMMARY", ["Metric", "Count", "Size"], table_rows))
+        headers = [t("table.header.metric", default="Metric"), t("table.header.count", default="Count"), t("table.header.size", default="Size")]
+        print(render_table(t("table.title.quarantine", default="PHOTO HEALER — QUARANTINE SUMMARY"), headers, table_rows))
 
     return 0
 
@@ -739,7 +744,7 @@ def handle_carve(args: argparse.Namespace) -> int:
     """Execute embedded preview and thumbnail carving."""
     target_path = Path(args.path)
     if not target_path.exists():
-        sys.stderr.write(f"Error: Target path does not exist: {target_path}\n")
+        sys.stderr.write(t("carve.error.path_not_found", path=target_path, default=f"Error: Target path does not exist: {target_path}") + "\n")
         return 1
 
     # Single file carve
@@ -747,39 +752,39 @@ def handle_carve(args: argparse.Namespace) -> int:
         preview: CarvedPreview | None = ThumbnailCarver.extract_best_preview(target_path)
         if preview is None:
             if not args.quiet:
-                print(f"No embedded preview or thumbnail found in: {target_path.name}")
+                print(t("carve.info.no_preview", name=target_path.name, default=f"No embedded preview or thumbnail found in: {target_path.name}"))
             return 0
 
         out_dir = Path(args.dest) if args.dest else target_path.parent / "_Previews"
         out_file = out_dir / f"{target_path.stem}_{preview.preview_type}.jpg"
 
         if out_file.exists() and not args.force:
-            sys.stderr.write(f"Error: Output file already exists: {out_file}. Use --force to overwrite.\n")
+            sys.stderr.write(t("carve.error.output_exists", path=out_file, default=f"Error: Output file already exists: {out_file}. Use --force to overwrite.") + "\n")
             return 1
 
         dim_str = f"{preview.width}x{preview.height}" if preview.width and preview.height else "unknown"
 
         if args.dry_run:
             if not args.quiet:
-                print(f"[DRY-RUN] Would carve preview from {target_path.name}:")
-                print(f"  Type       : {preview.preview_type}")
-                print(f"  Resolution : {dim_str}")
-                print(f"  Size       : {format_size(preview.size)}")
-                print(f"  Destination: {out_file.name}")
+                print(t("carve.dry_run.header", name=target_path.name, default=f"[DRY-RUN] Would carve preview from {target_path.name}:"))
+                print(t("carve.dry_run.type", type=preview.preview_type, default=f"  Type       : {preview.preview_type}"))
+                print(t("carve.dry_run.resolution", resolution=dim_str, default=f"  Resolution : {dim_str}"))
+                print(t("carve.dry_run.size", size=format_size(preview.size), default=f"  Size       : {format_size(preview.size)}"))
+                print(t("carve.dry_run.destination", name=out_file.name, default=f"  Destination: {out_file.name}"))
             return 0
 
         try:
             out_dir.mkdir(parents=True, exist_ok=True)
             out_file.write_bytes(preview.data)
         except OSError as e:
-            sys.stderr.write(f"Error writing carved preview: {e}\n")
+            sys.stderr.write(t("carve.error.write_failed", error=e, default=f"Error writing carved preview: {e}") + "\n")
             return 1
 
         if not args.quiet:
-            print(f"[CARVED] {target_path.name} -> {out_file.name}")
-            print(f"  Type       : {preview.preview_type}")
-            print(f"  Resolution : {dim_str}")
-            print(f"  Size       : {format_size(preview.size)}")
+            print(t("carve.success.header", src=target_path.name, dst=out_file.name, default=f"[CARVED] {target_path.name} -> {out_file.name}"))
+            print(t("carve.dry_run.type", type=preview.preview_type, default=f"  Type       : {preview.preview_type}"))
+            print(t("carve.dry_run.resolution", resolution=dim_str, default=f"  Resolution : {dim_str}"))
+            print(t("carve.dry_run.size", size=format_size(preview.size), default=f"  Size       : {format_size(preview.size)}"))
         return 0
 
     # Directory carve
@@ -793,13 +798,13 @@ def handle_carve(args: argparse.Namespace) -> int:
     total_files = len(file_list)
     if total_files == 0:
         if not args.quiet:
-            print(f"No image files found in {target_path.resolve()}.")
+            print(t("carve.info.no_images", path=target_path.resolve(), default=f"No image files found in {target_path.resolve()}."))
         return 0
 
     if not args.quiet:
-        print(f"Scanning {total_files} files for embedded previews...")
+        print(t("carve.info.scanning", count=total_files, default=f"Scanning {total_files} files for embedded previews..."))
 
-    progress = ProgressBar(total_files, prefix="Carving previews", quiet=args.quiet)
+    progress = ProgressBar(total_files, prefix=t("progress.carving_previews", default="Carving previews"), quiet=args.quiet)
 
     carved_count = 0
     skipped_count = 0
@@ -834,8 +839,8 @@ def handle_carve(args: argparse.Namespace) -> int:
 
             carved_count += 1
             total_saved_bytes += preview.size
-            t = preview.preview_type
-            type_counts[t] = type_counts.get(t, 0) + 1
+            t_type = preview.preview_type
+            type_counts[t_type] = type_counts.get(t_type, 0) + 1
         except Exception:
             skipped_count += 1
 
@@ -845,115 +850,148 @@ def handle_carve(args: argparse.Namespace) -> int:
 
     # Summary table
     if not args.quiet:
-        action_name = "Carved (dry-run)" if args.dry_run else "Carved previews"
+        action_name = t("metric.carved_dry_run", default="Carved (dry-run)") if args.dry_run else t("metric.carved_success", default="Carved previews")
         table_rows = [
-            ["Scanned files", str(total_files), "-"],
+            [t("metric.total_scanned", default="Scanned files"), str(total_files), "-"],
             [action_name, str(carved_count), format_size(total_saved_bytes)],
-            ["  - MPF Full HD previews", str(type_counts.get("mpf", 0)), "-"],
-            ["  - EXIF thumbnails", str(type_counts.get("exif_thumb", 0)), "-"],
-            ["  - Raw stream carved", str(type_counts.get("raw_carved", 0)), "-"],
-            ["Skipped (no preview / exists)", str(skipped_count), "-"],
-            ["Total extracted volume", "-", format_size(total_saved_bytes)],
+            [t("metric.mpf_previews", default="  - MPF Full HD previews"), str(type_counts.get("mpf", 0)), "-"],
+            [t("metric.exif_thumbnails", default="  - EXIF thumbnails"), str(type_counts.get("exif_thumb", 0)), "-"],
+            [t("metric.raw_carved", default="  - Raw stream carved"), str(type_counts.get("raw_carved", 0)), "-"],
+            [t("metric.skipped_no_preview_or_exists", default="Skipped (no preview / exists)"), str(skipped_count), "-"],
+            [t("metric.total_extracted_volume", default="Total extracted volume"), "-", format_size(total_saved_bytes)],
         ]
-        print(render_table("PHOTO HEALER — CARVER SUMMARY", ["Metric", "Count", "Size"], table_rows))
+        headers = [t("table.header.metric", default="Metric"), t("table.header.count", default="Count"), t("table.header.size", default="Size")]
+        print(render_table(t("table.title.carve", default="PHOTO HEALER — CARVER SUMMARY"), headers, table_rows))
 
     return 0
 
 
 # ── CLI Parser Setup & Main ───────────────────────────────────────────────────
-def build_parser() -> argparse.ArgumentParser:
-    """Construct the top-level argument parser and subcommands."""
+def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
+    """Construct the top-level argument parser and subcommands with localized text."""
     parser = argparse.ArgumentParser(
         prog="photo-healer",
-        description="Photo Healer — Forensic repair tool for SSD TRIM-damaged photo archives.",
-        epilog="Use 'photo-healer <command> --help' for details on each subcommand.",
+        description=t("cli.description", lang=lang, default="Photo Healer — Forensic repair tool for SSD TRIM-damaged photo archives."),
+        epilog=t("cli.epilog", lang=lang, default="Use 'photo-healer <command> --help' for details on each subcommand."),
     )
-    parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
+    parser.add_argument(
+        "--lang",
+        choices=list(SUPPORTED_LANGUAGES),
+        help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru; default: system auto-detect)"),
+    )
+    parser.add_argument(
+        "--version",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help=t("cli.arg.version", lang=lang, default="Show program version and exit"),
+    )
 
-    subparsers = parser.add_subparsers(dest="command", metavar="<command>")
+    subparsers = parser.add_subparsers(dest="command", metavar=t("cli.metavar.command", lang=lang, default="<command>"))
 
     # 1. triage
     p_triage = subparsers.add_parser(
         "triage",
-        help="Scan and audit directory for TRIM damage and candidates",
-        description="High-speed streaming triage to audit image archives and classify TRIM damage.",
+        help=t("cmd.triage.help", lang=lang, default="Scan and audit directory for TRIM damage and candidates"),
+        description=t("cmd.triage.desc", lang=lang, default="High-speed streaming triage to audit image archives and classify TRIM damage."),
     )
-    p_triage.add_argument("path", help="Directory path to scan and audit")
-    p_triage.add_argument("--quarantine", metavar="DIR", help="Move TRIM-zero files to quarantine directory")
-    p_triage.add_argument("--report", metavar="FILE", help="Save triage report to specified JSON file")
-    p_triage.add_argument("--ext", nargs="+", metavar="EXT", help="File extensions to include (default: all image types)")
-    p_triage.add_argument("--dry-run", action="store_true", help="Simulate quarantine without moving files")
-    p_triage.add_argument("--force", action="store_true", help="Overwrite existing files in quarantine destination")
-    p_triage.add_argument("--quiet", action="store_true", help="Suppress progress bars and summary tables")
+    p_triage.add_argument("path", help=t("triage.arg.path", lang=lang, default="Directory path to scan and audit"))
+    p_triage.add_argument("--quarantine", metavar="DIR", help=t("triage.arg.quarantine", lang=lang, default="Move TRIM-zero files to quarantine directory"))
+    p_triage.add_argument("--report", metavar="FILE", help=t("triage.arg.report", lang=lang, default="Save triage report to specified JSON file"))
+    p_triage.add_argument("--ext", nargs="+", metavar="EXT", help=t("triage.arg.ext", lang=lang, default="File extensions to include (default: all image types)"))
+    p_triage.add_argument("--dry-run", action="store_true", help=t("triage.arg.dry_run", lang=lang, default="Simulate quarantine without moving files"))
+    p_triage.add_argument("--force", action="store_true", help=t("triage.arg.force", lang=lang, default="Overwrite existing files in quarantine destination"))
+    p_triage.add_argument("--quiet", action="store_true", help=t("triage.arg.quiet", lang=lang, default="Suppress progress bars and summary tables"))
+    p_triage.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 2. heal
     p_heal = subparsers.add_parser(
         "heal",
-        help="Heal a single photo using a donor JPEG header",
-        description="Transplant donor JPEG markers (DQT, DHT, SOF, SOS) onto damaged file.",
+        help=t("cmd.heal.help", lang=lang, default="Heal a single photo using a donor JPEG header"),
+        description=t("cmd.heal.desc", lang=lang, default="Transplant donor JPEG markers (DQT, DHT, SOF, SOS) onto damaged file."),
     )
-    p_heal.add_argument("broken_file", help="Path to damaged JPEG image")
-    p_heal.add_argument("--donor", required=True, help="Path to healthy donor JPEG image")
-    p_heal.add_argument("--output", metavar="DEST", help="Output file path (default: <name>_HEALED.jpg)")
-    p_heal.add_argument("--inplace", action="store_true", help="Replace original file in place (creates .bak backup)")
-    p_heal.add_argument("--force", action="store_true", help="Force overwrite existing destination or backup files")
-    p_heal.add_argument("--dry-run", action="store_true", help="Simulate healing without writing to disk")
-    p_heal.add_argument("--quiet", action="store_true", help="Suppress progress and informational logs")
+    p_heal.add_argument("broken_file", help=t("heal.arg.broken_file", lang=lang, default="Path to damaged JPEG image"))
+    p_heal.add_argument("--donor", required=True, help=t("heal.arg.donor", lang=lang, default="Path to healthy donor JPEG image"))
+    p_heal.add_argument("--output", metavar="DEST", help=t("heal.arg.output", lang=lang, default="Output file path (default: <name>_HEALED.jpg)"))
+    p_heal.add_argument("--inplace", action="store_true", help=t("heal.arg.inplace", lang=lang, default="Replace original file in place (creates .bak backup)"))
+    p_heal.add_argument("--force", action="store_true", help=t("heal.arg.force", lang=lang, default="Force overwrite existing destination or backup files"))
+    p_heal.add_argument("--dry-run", action="store_true", help=t("heal.arg.dry_run", lang=lang, default="Simulate healing without writing to disk"))
+    p_heal.add_argument("--quiet", action="store_true", help=t("heal.arg.quiet", lang=lang, default="Suppress progress and informational logs"))
+    p_heal.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 3. batch-heal
     p_batch = subparsers.add_parser(
         "batch-heal",
-        help="Batch recovery of photo series with auto-donor matching",
-        description="Scan directory for all TRIM-damaged candidates and repair using donor headers.",
+        help=t("cmd.batch_heal.help", lang=lang, default="Batch recovery of photo series with auto-donor matching"),
+        description=t("cmd.batch_heal.desc", lang=lang, default="Scan directory for all TRIM-damaged candidates and repair using donor headers."),
     )
-    p_batch.add_argument("folder", help="Folder containing damaged photos")
-    p_batch.add_argument("--donor", help="Explicit donor file to use for all candidates")
-    p_batch.add_argument("--auto-donor", action="store_true", help="Automatically search for healthy donor in folder")
-    p_batch.add_argument("--output", metavar="DIR", help="Output directory for healed photos")
-    p_batch.add_argument("--inplace", action="store_true", help="Replace original files in place (creates .bak backups)")
-    p_batch.add_argument("--force", action="store_true", help="Force overwrite existing healed files or backups")
-    p_batch.add_argument("--dry-run", action="store_true", help="Simulate batch healing without writing files")
-    p_batch.add_argument("--quiet", action="store_true", help="Suppress progress bars and summary output")
+    p_batch.add_argument("folder", help=t("batch_heal.arg.folder", lang=lang, default="Folder containing damaged photos"))
+    p_batch.add_argument("--donor", help=t("batch_heal.arg.donor", lang=lang, default="Explicit donor file to use for all candidates"))
+    p_batch.add_argument("--auto-donor", action="store_true", help=t("batch_heal.arg.auto_donor", lang=lang, default="Automatically search for healthy donor in folder"))
+    p_batch.add_argument("--output", metavar="DIR", help=t("batch_heal.arg.output", lang=lang, default="Output directory for healed photos"))
+    p_batch.add_argument("--inplace", action="store_true", help=t("batch_heal.arg.inplace", lang=lang, default="Replace original files in place (creates .bak backups)"))
+    p_batch.add_argument("--force", action="store_true", help=t("batch_heal.arg.force", lang=lang, default="Force overwrite existing healed files or backups"))
+    p_batch.add_argument("--dry-run", action="store_true", help=t("batch_heal.arg.dry_run", lang=lang, default="Simulate batch healing without writing files"))
+    p_batch.add_argument("--quiet", action="store_true", help=t("batch_heal.arg.quiet", lang=lang, default="Suppress progress bars and summary output"))
+    p_batch.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 4. quarantine
     p_quar = subparsers.add_parser(
         "quarantine",
-        help="Safely move TRIM-zero unrecoverable files to quarantine",
-        description="Relocate TRIM-erased 0x00 files recorded in triage report to clean the archive.",
+        help=t("cmd.quarantine.help", lang=lang, default="Safely move TRIM-zero unrecoverable files to quarantine"),
+        description=t("cmd.quarantine.desc", lang=lang, default="Relocate TRIM-erased 0x00 files recorded in triage report to clean the archive."),
     )
-    p_quar.add_argument("--report", required=True, metavar="FILE", help="JSON report path generated by triage")
-    p_quar.add_argument("--dest", required=True, metavar="DIR", help="Quarantine destination directory")
-    p_quar.add_argument("--dry-run", action="store_true", help="Simulate moves without moving files")
-    p_quar.add_argument("--force", action="store_true", help="Force overwrite if destination already exists")
-    p_quar.add_argument("--quiet", action="store_true", help="Suppress progress and summary output")
+    p_quar.add_argument("--report", required=True, metavar="FILE", help=t("quarantine.arg.report", lang=lang, default="JSON report path generated by triage"))
+    p_quar.add_argument("--dest", required=True, metavar="DIR", help=t("quarantine.arg.dest", lang=lang, default="Quarantine destination directory"))
+    p_quar.add_argument("--dry-run", action="store_true", help=t("quarantine.arg.dry_run", lang=lang, default="Simulate moves without moving files"))
+    p_quar.add_argument("--force", action="store_true", help=t("quarantine.arg.force", lang=lang, default="Force overwrite if destination already exists"))
+    p_quar.add_argument("--quiet", action="store_true", help=t("quarantine.arg.quiet", lang=lang, default="Suppress progress and summary output"))
+    p_quar.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     # 5. carve
     p_carve = subparsers.add_parser(
         "carve",
-        help="Extract embedded previews (MPF, EXIF thumbnails, raw streams)",
-        description="Carve embedded JPEG thumbnails, Full HD MPF previews, or raw image streams.",
+        help=t("cmd.carve.help", lang=lang, default="Extract embedded previews (MPF, EXIF thumbnails, raw streams)"),
+        description=t("cmd.carve.desc", lang=lang, default="Carve embedded JPEG thumbnails, Full HD MPF previews, or raw image streams."),
     )
-    p_carve.add_argument("path", help="File or folder path to carve previews from")
-    p_carve.add_argument("--dest", metavar="DIR", help="Output directory for carved previews (default: _Previews)")
-    p_carve.add_argument("--force", action="store_true", help="Force overwrite existing carved previews")
-    p_carve.add_argument("--dry-run", action="store_true", help="Simulate extraction without writing files")
-    p_carve.add_argument("--quiet", action="store_true", help="Suppress progress and summary output")
+    p_carve.add_argument("path", help=t("carve.arg.path", lang=lang, default="File or folder path to carve previews from"))
+    p_carve.add_argument("--dest", metavar="DIR", help=t("carve.arg.dest", lang=lang, default="Output directory for carved previews (default: _Previews)"))
+    p_carve.add_argument("--force", action="store_true", help=t("carve.arg.force", lang=lang, default="Force overwrite existing carved previews"))
+    p_carve.add_argument("--dry-run", action="store_true", help=t("carve.arg.dry_run", lang=lang, default="Simulate extraction without writing files"))
+    p_carve.add_argument("--quiet", action="store_true", help=t("carve.arg.quiet", lang=lang, default="Suppress progress and summary output"))
+    p_carve.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     """Main CLI entry point."""
-    parser = build_parser()
-
     if argv is None:
         argv = sys.argv[1:]
+
+    # Early detection of --lang in argv before constructing parser so help is translated
+    chosen_lang: str | None = None
+    for idx, arg in enumerate(argv):
+        if arg == "--lang" and idx + 1 < len(argv):
+            chosen_lang = argv[idx + 1]
+            break
+        elif arg.startswith("--lang="):
+            chosen_lang = arg.split("=", 1)[1]
+            break
+
+    if chosen_lang:
+        set_language(chosen_lang)
+
+    active_lang = get_language()
+    parser = build_parser(lang=active_lang)
 
     if not argv:
         parser.print_help()
         return 1
 
     args = parser.parse_args(argv)
+
+    if getattr(args, "lang", None):
+        set_language(args.lang)
 
     if args.command == "triage":
         return handle_triage(args)

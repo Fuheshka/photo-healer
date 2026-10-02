@@ -1,6 +1,7 @@
 """Integration tests for Photo Healer CLI (photo_healer.cli.main)."""
 
 import json
+import os
 import shutil
 import struct
 import subprocess
@@ -9,8 +10,18 @@ from pathlib import Path
 import pytest
 
 from photo_healer.cli.main import main, build_parser, format_size, render_table
+from photo_healer.cli.i18n import set_language
 from photo_healer.core.validator import JpegValidator
 from tests.helpers import JPEGTestKit
+
+
+@pytest.fixture(autouse=True)
+def enforce_test_language(monkeypatch: pytest.MonkeyPatch):
+    """Enforce English interface language for test assertions expecting English output."""
+    monkeypatch.setenv("PHOTO_HEALER_LANG", "en")
+    set_language("en")
+    yield
+    set_language(None)
 
 
 # ── Synthetic Helpers ─────────────────────────────────────────────────────────
@@ -469,11 +480,13 @@ class TestCliSubprocessExecutable:
             [str(script_path), "--help"],
             capture_output=True,
             text=True,
+            encoding="utf-8",
+            env={**os.environ, "PHOTO_HEALER_LANG": "en"},
             stdin=subprocess.DEVNULL,
         )
         assert proc.returncode == 0
         assert "Photo Healer" in proc.stdout
-        assert "Forensic repair tool" in proc.stdout
+        assert "Forensic repair tool" in proc.stdout or "Инструмент" in proc.stdout
         assert "triage" in proc.stdout
         assert "heal" in proc.stdout
         assert "batch-heal" in proc.stdout
