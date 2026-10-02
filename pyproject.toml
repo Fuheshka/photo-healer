@@ -21,6 +21,10 @@ photo-healer = "photo_healer.cli.main:main"
 dev = [
     "pytest>=8.0.0",
 ]
+gui = [
+    "PySide6>=6.5.0",
+    "pillow>=10.0.0",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
