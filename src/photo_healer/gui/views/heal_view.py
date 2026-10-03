@@ -41,53 +41,13 @@ from PySide6.QtWidgets import (
 from photo_healer.core.validator import JpegValidator
 from photo_healer.gui.i18n import i18n, t
 from photo_healer.gui.models.file_table_model import format_size
+from photo_healer.gui.widgets.donor_pool_widget import DonorDropBox, DonorPoolWidget
 from photo_healer.gui.widgets.split_preview import SplitPreviewWidget
 from photo_healer.gui.workers.heal_worker import (
     HealWorker,
     extract_camera_info,
     find_matching_donor,
 )
-
-
-class DonorDropBox(QFrame):
-    """Drop zone and card for donor JPEG files."""
-
-    donor_dropped = Signal(Path)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setAcceptDrops(True)
-        self.setObjectName("donorCard")
-        self.setMinimumHeight(64)
-        self._is_drag_active = False
-
-    def dragEnterEvent(self, event: QDragEnterEvent) -> None:
-        if event.mimeData().hasUrls():
-            urls = event.mimeData().urls()
-            for u in urls:
-                p = Path(u.toLocalFile())
-                if p.suffix.lower() in {".jpg", ".jpeg"}:
-                    event.acceptProposedAction()
-                    self._is_drag_active = True
-                    self.update()
-                    return
-        event.ignore()
-
-    def dragLeaveEvent(self, event) -> None:
-        self._is_drag_active = False
-        self.update()
-
-    def dropEvent(self, event: QDropEvent) -> None:
-        self._is_drag_active = False
-        urls = event.mimeData().urls()
-        for u in urls:
-            p = Path(u.toLocalFile())
-            if p.suffix.lower() in {".jpg", ".jpeg"} and p.is_file():
-                self.donor_dropped.emit(p)
-                event.acceptProposedAction()
-                self.update()
-                return
-        event.ignore()
 
 
 class HealView(QWidget):
@@ -97,7 +57,7 @@ class HealView(QWidget):
         super().__init__(parent)
         self.archive_root: Path | None = None
         self.current_candidate: Path | None = None
-        self.manual_donor_path: Path | None = None
+        self._manual_donor_path: Path | None = None
         self.worker: HealWorker | None = None
 
         self._init_ui()
@@ -105,6 +65,18 @@ class HealView(QWidget):
 
         # Connect live reactive localization
         i18n.language_changed.connect(self._retranslate_ui)
+
+    @property
+    def manual_donor_path(self) -> Path | None:
+        if hasattr(self, "donor_pool_widget"):
+            return self.donor_pool_widget.manual_donor_path
+        return self._manual_donor_path
+
+    @manual_donor_path.setter
+    def manual_donor_path(self, val: Path | None) -> None:
+        self._manual_donor_path = val
+        if hasattr(self, "donor_pool_widget"):
+            self.donor_pool_widget.manual_donor_path = val
 
     def _init_ui(self) -> None:
         root_layout = QVBoxLayout(self)
@@ -154,48 +126,19 @@ class HealView(QWidget):
         btn_queue_layout.addWidget(self.btn_clear_queue)
         left_layout.addLayout(btn_queue_layout)
 
-        # 1.2 Donor Selection Box
-        self.donor_group = QFrame(self.left_panel)
-        self.donor_group.setObjectName("settingsCard")
-        donor_layout = QVBoxLayout(self.donor_group)
-        donor_layout.setContentsMargins(12, 12, 12, 12)
-        donor_layout.setSpacing(8)
+        # 1.2 Donor Pool Manager
+        self.donor_pool_widget = DonorPoolWidget(self.left_panel)
+        self.donor_pool_widget.donor_changed.connect(self._reload_preview)
+        left_layout.addWidget(self.donor_pool_widget)
 
-        self.lbl_donor_section = QLabel(t("heal.donor.title"))
-        self.lbl_donor_section.setStyleSheet("font-size: 12px; font-weight: bold; color: #e4e4e7;")
-        donor_layout.addWidget(self.lbl_donor_section)
-
-        # Auto-Donor Toggle
-        self.chk_auto_donor = QCheckBox(t("heal.donor.auto"))
-        self.chk_auto_donor.setChecked(True)
-        self.chk_auto_donor.toggled.connect(self._on_donor_mode_toggled)
-        donor_layout.addWidget(self.chk_auto_donor)
-
-        # Drop Box Card for donor
-        self.donor_drop_card = DonorDropBox(self.donor_group)
-        drop_layout = QVBoxLayout(self.donor_drop_card)
-        drop_layout.setContentsMargins(10, 8, 10, 8)
-        drop_layout.setSpacing(4)
-
-        self.lbl_donor_status = QLabel(t("heal.donor.none"))
-        self.lbl_donor_status.setStyleSheet("font-size: 11px; color: #a1a1aa;")
-        self.lbl_donor_status.setWordWrap(True)
-        drop_layout.addWidget(self.lbl_donor_status)
-
-        self.lbl_donor_drop_hint = QLabel(t("heal.donor.drop_prompt"))
-        self.lbl_donor_drop_hint.setStyleSheet("font-size: 10px; color: #71717a; font-style: italic;")
-        drop_layout.addWidget(self.lbl_donor_drop_hint)
-        self.donor_drop_card.donor_dropped.connect(self._on_donor_file_dropped)
-
-        donor_layout.addWidget(self.donor_drop_card)
-
-        # Browse Donor Button
-        self.btn_browse_donor = QPushButton(t("heal.donor.browse"))
-        self.btn_browse_donor.setObjectName("btnBrowseDonor")
-        self.btn_browse_donor.clicked.connect(self._browse_donor_file)
-        donor_layout.addWidget(self.btn_browse_donor)
-
-        left_layout.addWidget(self.donor_group)
+        # Legacy backward-compatible attributes & aliases
+        self.donor_group = self.donor_pool_widget
+        self.chk_auto_donor = self.donor_pool_widget.chk_auto_donor
+        self.donor_drop_card = self.donor_pool_widget.donor_drop_card
+        self.btn_browse_donor = self.donor_pool_widget.btn_browse_donor
+        self.lbl_donor_status = self.donor_pool_widget.lbl_compat_indicator
+        self.lbl_donor_section = self.donor_pool_widget.lbl_title
+        self.lbl_donor_drop_hint = self.donor_pool_widget.lbl_donor_drop_hint
 
         # 1.3 Restoration Settings Box
         self.settings_group = QFrame(self.left_panel)
@@ -595,6 +538,11 @@ class HealView(QWidget):
         self.lbl_file_details.setText(t("heal.preview.no_selection"))
         self._refresh_donor_label()
 
+    def set_archive_path(self, path: Path | str | None) -> None:
+        self.archive_root = Path(path).resolve() if path else None
+        if hasattr(self, "donor_pool_widget"):
+            self.donor_pool_widget.set_archive_root(self.archive_root)
+
     def _browse_add_candidates(self) -> None:
         """Browse dialog to add damaged JPEG candidates."""
         files, _ = QFileDialog.getOpenFileNames(
@@ -613,66 +561,73 @@ class HealView(QWidget):
 
     def _on_donor_mode_toggled(self, checked: bool) -> None:
         """Toggle Auto-donor vs manual donor mode."""
-        if checked:
-            self.manual_donor_path = None
+        if hasattr(self, "donor_pool_widget"):
+            if checked:
+                self.donor_pool_widget.manual_donor_path = None
+                self.donor_pool_widget.set_mode("folder" if self.donor_pool_widget.folder_paths else "auto")
+            else:
+                self.donor_pool_widget.set_mode("file")
+        else:
+            if checked:
+                self.manual_donor_path = None
         self._refresh_donor_label()
         self._reload_preview()
 
     def _on_donor_file_dropped(self, donor_path: Path) -> None:
         """Handler for donor file dropped into drop card."""
-        self.manual_donor_path = donor_path
-        self.chk_auto_donor.setChecked(False)
+        if hasattr(self, "donor_pool_widget"):
+            self.donor_pool_widget.set_manual_donor_file(donor_path)
+            self.donor_pool_widget.set_mode("file")
+        else:
+            self.manual_donor_path = donor_path
         self._refresh_donor_label()
         self._reload_preview()
 
     def _browse_donor_file(self) -> None:
         """Browse dialog to pick manual donor JPEG file."""
-        init_dir = (
-            str(self.current_candidate.parent)
-            if self.current_candidate
-            else (str(self.archive_root) if self.archive_root else "")
-        )
-        file_path, _ = QFileDialog.getOpenFileName(
-            self,
-            t("heal.dialog.select_donor"),
-            init_dir,
-            "JPEG Images (*.jpg *.jpeg *.JPG *.JPEG);;All Files (*.*)",
-        )
-        if file_path:
-            self.manual_donor_path = Path(file_path)
-            self.chk_auto_donor.setChecked(False)
-            self._refresh_donor_label()
-            self._reload_preview()
+        if hasattr(self, "donor_pool_widget"):
+            self.donor_pool_widget._browse_donor_file()
+        else:
+            init_dir = (
+                str(self.current_candidate.parent)
+                if self.current_candidate
+                else (str(self.archive_root) if self.archive_root else "")
+            )
+            file_path, _ = QFileDialog.getOpenFileName(
+                self,
+                t("heal.dialog.select_donor"),
+                init_dir,
+                "JPEG Images (*.jpg *.jpeg *.JPG *.JPEG);;All Files (*.*)",
+            )
+            if file_path:
+                self.manual_donor_path = Path(file_path)
+                self.chk_auto_donor.setChecked(False)
+                self._refresh_donor_label()
+                self._reload_preview()
 
     def get_effective_donor(self) -> Path | None:
         """Resolve effective donor file based on auto/manual mode and current candidate."""
+        if hasattr(self, "donor_pool_widget"):
+            resolved = self.donor_pool_widget.get_effective_donor(self.current_candidate)
+            if resolved is not None:
+                return resolved
+
         if self.manual_donor_path and self.manual_donor_path.is_file():
             return self.manual_donor_path
 
         if self.chk_auto_donor.isChecked() and self.current_candidate:
-            return find_matching_donor(self.current_candidate, archive_root=self.archive_root)
+            return find_matching_donor(
+                self.current_candidate,
+                archive_root=self.archive_root,
+                donor_index=getattr(self.donor_pool_widget, "donor_index", None) if hasattr(self, "donor_pool_widget") else None,
+            )
 
         return None
 
     def _refresh_donor_label(self) -> None:
         """Update donor card display text and metadata."""
-        donor = self.get_effective_donor()
-        if donor is None:
-            self.lbl_donor_status.setText(t("heal.donor.none"))
-            self.lbl_donor_status.setStyleSheet("font-size: 11px; color: #a1a1aa;")
-            return
-
-        make, model, dim = extract_camera_info(donor)
-        dim_str = f"{dim[0]}x{dim[1]}" if dim[0] > 0 else "JPEG"
-        cam_info = f" • {make} {model}".strip() if (make or model) else ""
-
-        if self.manual_donor_path:
-            text = t("heal.donor.manual", name=donor.name, geometry=f"{dim_str}{cam_info}")
-        else:
-            text = t("heal.donor.auto_found", name=donor.name, geometry=f"{dim_str}{cam_info}")
-
-        self.lbl_donor_status.setText(text)
-        self.lbl_donor_status.setStyleSheet("font-size: 11px; color: #10b981; font-weight: 600;")
+        if hasattr(self, "donor_pool_widget"):
+            self.donor_pool_widget.update_compatibility()
 
     # ── Candidate Selection and Preview Reload ────────────────────────────────
 
@@ -682,11 +637,15 @@ class HealView(QWidget):
             self.preview_widget.clear()
             self.lbl_file_details.setText(t("heal.preview.no_selection"))
             self.lbl_stats_badge.setVisible(False)
+            if hasattr(self, "donor_pool_widget"):
+                self.donor_pool_widget.set_current_candidate(None)
             self._refresh_donor_label()
             return
 
         cand_str = current.data(Qt.ItemDataRole.UserRole)
         self.current_candidate = Path(cand_str)
+        if hasattr(self, "donor_pool_widget"):
+            self.donor_pool_widget.set_current_candidate(self.current_candidate)
         self._refresh_donor_label()
         self._reload_preview()
 
@@ -774,6 +733,7 @@ class HealView(QWidget):
             create_backup=self.chk_create_backup.isChecked(),
             output_dir=out_dest.parent,
             archive_root=self.archive_root,
+            donor_index=getattr(self.donor_pool_widget, "donor_index", None) if hasattr(self, "donor_pool_widget") else None,
             parent=self,
         )
 
@@ -821,6 +781,7 @@ class HealView(QWidget):
             strip_thumbnail=self.chk_strip_thumbnail.isChecked(),
             create_backup=self.chk_create_backup.isChecked(),
             archive_root=self.archive_root,
+            donor_index=getattr(self.donor_pool_widget, "donor_index", None) if hasattr(self, "donor_pool_widget") else None,
             parent=self,
         )
 
@@ -855,3 +816,12 @@ class HealView(QWidget):
             t("heal.log.batch_done", healed=healed, skipped=skipped, errors=errors)
             + f"\n{restored} total restored data.",
         )
+
+    def closeEvent(self, event) -> None:
+        """Save settings and ensure background tasks are gracefully halted."""
+        if hasattr(self, "donor_pool_widget"):
+            self.donor_pool_widget.save_settings()
+        if self.worker and self.worker.isRunning():
+            self.worker.stop()
+            self.worker.wait()
+        super().closeEvent(event)

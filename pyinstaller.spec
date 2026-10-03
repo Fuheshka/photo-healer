@@ -28,6 +28,8 @@ a = Analysis(
         "photo_healer.cli.updater",
         "photo_healer.core",
         "photo_healer.core.carver",
+        "photo_healer.core.donor_discovery",
+        "photo_healer.core.donor_pool",
         "photo_healer.core.entropy",
         "photo_healer.core.parser",
         "photo_healer.core.resync",

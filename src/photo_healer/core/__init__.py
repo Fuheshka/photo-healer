@@ -7,6 +7,9 @@ from photo_healer.core.validator import JpegValidator, ValidationResult
 from photo_healer.core.carver import ThumbnailCarver, CarvedPreview, RescueResult
 from photo_healer.core.resync import StreamResync, RestartMarker, RestartCadence, ResyncResult
 
+from photo_healer.core.donor_pool import DonorIndex, DonorEntry, DonorMatch, find_best_donor
+from photo_healer.core.donor_discovery import DonorDiscovery, DonorFolderCandidate
+
 __all__ = [
     "JpegParser",
     "Marker",
@@ -22,6 +25,12 @@ __all__ = [
     "RestartMarker",
     "RestartCadence",
     "ResyncResult",
+    "DonorIndex",
+    "DonorEntry",
+    "DonorMatch",
+    "find_best_donor",
+    "DonorDiscovery",
+    "DonorFolderCandidate",
 ]
 
 
