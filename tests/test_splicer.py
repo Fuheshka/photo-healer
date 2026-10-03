@@ -1,9 +1,13 @@
 """Tests for photo_healer.core.splicer HeaderSplicer."""
 
 import io
+import struct
 import pytest
 from photo_healer.core.splicer import HeaderSplicer, SpliceResult
+from photo_healer.core.validator import JpegValidator
+from photo_healer.core.carver import ThumbnailCarver
 from tests.helpers import JPEGTestKit
+from tests.test_carver import build_exif_app1, build_mpf_app2, build_synthetic_jpeg
 
 
 class TestHeaderSplicer:
@@ -99,5 +103,94 @@ class TestHeaderSplicer:
         out = io.BytesIO()
         with pytest.raises(ValueError, match="must be seekable"):
             splicer.splice_stream(ns, out, entropy_offset=None)
+
+    def test_strip_donor_thumbnail_exif_ifd1_default(self):
+        thumb_bytes = build_synthetic_jpeg(width=160, height=120)
+        app1 = build_exif_app1(thumb_bytes, endian="<", thumb_in_ifd1=True)
+        donor_header = JPEGTestKit.SOI + app1 + JPEGTestKit.minimal_donor_header(640, 480)[2:]
+        live_data = b"\x12\x34\x56\x78\xff\xd9"
+
+        # By default, HeaderSplicer must strip donor thumbnail
+        splicer = HeaderSplicer(donor_header)
+        res = splicer.splice_bytes(live_data)
+
+        # 1. Structure must be a valid JPEG
+        val = JpegValidator.validate(res.data)
+        assert val.is_valid
+        assert val.width == 640
+        assert val.height == 480
+
+        # 2. ThumbnailCarver must NOT find the donor's thumbnail
+        carver = ThumbnailCarver()
+        assert carver.extract_exif_thumbnail(res.data) is None
+
+    def test_strip_donor_thumbnail_exif_ifd1_big_endian(self):
+        thumb_bytes = build_synthetic_jpeg(width=160, height=120)
+        app1 = build_exif_app1(thumb_bytes, endian=">", thumb_in_ifd1=True)
+        donor_header = JPEGTestKit.SOI + app1 + JPEGTestKit.minimal_donor_header(640, 480)[2:]
+        live_data = b"\x12\x34\x56\x78\xff\xd9"
+
+        splicer = HeaderSplicer(donor_header)
+        res = splicer.splice_bytes(live_data)
+
+        val = JpegValidator.validate(res.data)
+        assert val.is_valid
+        carver = ThumbnailCarver()
+        assert carver.extract_exif_thumbnail(res.data) is None
+
+    def test_keep_donor_thumbnail_flag(self):
+        thumb_bytes = build_synthetic_jpeg(width=160, height=120)
+        app1 = build_exif_app1(thumb_bytes, endian="<", thumb_in_ifd1=True)
+        donor_header = JPEGTestKit.SOI + app1 + JPEGTestKit.minimal_donor_header(640, 480)[2:]
+        live_data = b"\x12\x34\x56\x78\xff\xd9"
+
+        # When strip_thumbnail=False, donor thumbnail must be preserved
+        splicer = HeaderSplicer(donor_header, strip_thumbnail=False)
+        res = splicer.splice_bytes(live_data)
+
+        val = JpegValidator.validate(res.data)
+        assert val.is_valid
+        carver = ThumbnailCarver()
+        extracted = carver.extract_exif_thumbnail(res.data)
+        assert extracted == thumb_bytes
+
+    def test_strip_donor_thumbnail_mpf_app2(self):
+        preview_bytes = build_synthetic_jpeg(width=1920, height=1080)
+        base = build_synthetic_jpeg(640, 480)
+        app2_mpf = build_mpf_app2([preview_bytes], primary_len=len(base), endian="<", mpf_header_file_offset=10)
+        # Synthetic ICC profile in APP2 to verify non-MPF APP2 is preserved
+        icc_payload = b"ICC_PROFILE\x00\x01\x00" + b"\x00" * 20
+        app2_icc = b"\xff\xe2" + struct.pack(">H", len(icc_payload) + 2) + icc_payload
+
+        donor_header = JPEGTestKit.SOI + app2_mpf + app2_icc + base[2:]
+        live_data = b"\xaa\xbb\xcc\xdd\xff\xd9"
+
+        splicer = HeaderSplicer(donor_header)
+        res = splicer.splice_bytes(live_data)
+
+        val = JpegValidator.validate(res.data)
+        assert val.is_valid
+
+        # MPF must be stripped
+        carver = ThumbnailCarver()
+        assert carver.extract_mpf_preview(res.data) is None
+        assert b"MPF\x00" not in res.data[:res.donor_header_len]
+
+        # ICC profile APP2 must be preserved
+        assert b"ICC_PROFILE\x00" in res.data[:res.donor_header_len]
+
+    def test_strip_donor_thumbnail_ifd0_direct(self):
+        thumb_bytes = build_synthetic_jpeg(width=160, height=120)
+        app1 = build_exif_app1(thumb_bytes, endian="<", thumb_in_ifd1=False)
+        donor_header = JPEGTestKit.SOI + app1 + JPEGTestKit.minimal_donor_header(640, 480)[2:]
+        live_data = b"\x12\x34\x56\x78\xff\xd9"
+
+        splicer = HeaderSplicer(donor_header)
+        res = splicer.splice_bytes(live_data)
+
+        val = JpegValidator.validate(res.data)
+        assert val.is_valid
+        carver = ThumbnailCarver()
+        assert carver.extract_exif_thumbnail(res.data) is None
 
 

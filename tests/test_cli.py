@@ -280,6 +280,62 @@ class TestCliHeal:
         assert main(["heal", str(broken), "--donor", str(missing)]) == 1
         assert main(["heal", str(missing), "--donor", str(donor)]) == 1
 
+    def test_heal_strips_donor_thumbnail_by_default(self, tmp_path):
+        from photo_healer.core.carver import ThumbnailCarver
+
+        thumb_bytes = create_healthy_jpeg(width=160, height=120)
+        donor = tmp_path / "donor_with_thumb.jpg"
+        donor.write_bytes(create_jpeg_with_exif_thumb(thumb_bytes, width=640, height=480))
+
+        broken = tmp_path / "broken.jpg"
+        broken.write_bytes(create_candidate_jpeg(width=640, height=480, zero_prefix_len=1024))
+
+        assert ThumbnailCarver().extract_exif_thumbnail(donor) is not None
+
+        code = main(["heal", str(broken), "--donor", str(donor)])
+        assert code == 0
+
+        healed = tmp_path / "broken_HEALED.jpg"
+        assert healed.exists()
+        assert JpegValidator.validate(healed).is_valid
+        assert ThumbnailCarver().extract_exif_thumbnail(healed) is None
+
+    def test_heal_keep_donor_thumbnail(self, tmp_path):
+        from photo_healer.core.carver import ThumbnailCarver
+
+        thumb_bytes = create_healthy_jpeg(width=160, height=120)
+        donor = tmp_path / "donor_with_thumb.jpg"
+        donor.write_bytes(create_jpeg_with_exif_thumb(thumb_bytes, width=640, height=480))
+
+        broken = tmp_path / "broken.jpg"
+        broken.write_bytes(create_candidate_jpeg(width=640, height=480, zero_prefix_len=1024))
+
+        code = main(["heal", str(broken), "--donor", str(donor), "--keep-donor-thumbnail"])
+        assert code == 0
+
+        healed = tmp_path / "broken_HEALED.jpg"
+        assert healed.exists()
+        assert JpegValidator.validate(healed).is_valid
+        assert ThumbnailCarver().extract_exif_thumbnail(healed) is not None
+
+    def test_heal_explicit_strip_thumbnail(self, tmp_path):
+        from photo_healer.core.carver import ThumbnailCarver
+
+        thumb_bytes = create_healthy_jpeg(width=160, height=120)
+        donor = tmp_path / "donor_with_thumb.jpg"
+        donor.write_bytes(create_jpeg_with_exif_thumb(thumb_bytes, width=640, height=480))
+
+        broken = tmp_path / "broken.jpg"
+        broken.write_bytes(create_candidate_jpeg(width=640, height=480, zero_prefix_len=1024))
+
+        code = main(["heal", str(broken), "--donor", str(donor), "--strip-thumbnail"])
+        assert code == 0
+
+        healed = tmp_path / "broken_HEALED.jpg"
+        assert healed.exists()
+        assert JpegValidator.validate(healed).is_valid
+        assert ThumbnailCarver().extract_exif_thumbnail(healed) is None
+
 
 class TestCliBatchHeal:
     """Tests for photo-healer batch-heal subcommand."""
@@ -351,6 +407,48 @@ class TestCliBatchHeal:
         empty_dir.mkdir()
         code = main(["batch-heal", str(empty_dir)])
         assert code == 0
+
+    def test_batch_heal_strips_donor_thumbnail_by_default(self, tmp_path):
+        from photo_healer.core.carver import ThumbnailCarver
+
+        folder = tmp_path / "batch_strip"
+        folder.mkdir()
+
+        thumb_bytes = create_healthy_jpeg(width=160, height=120)
+        donor = folder / "donor.jpg"
+        donor.write_bytes(create_jpeg_with_exif_thumb(thumb_bytes, width=800, height=600))
+
+        cand = folder / "cand.jpg"
+        cand.write_bytes(create_candidate_jpeg(width=800, height=600, zero_prefix_len=512))
+
+        code = main(["batch-heal", str(folder), "--auto-donor"])
+        assert code == 0
+
+        healed = folder / "cand_HEALED.jpg"
+        assert healed.exists()
+        assert JpegValidator.validate(healed).is_valid
+        assert ThumbnailCarver().extract_exif_thumbnail(healed) is None
+
+    def test_batch_heal_keep_donor_thumbnail(self, tmp_path):
+        from photo_healer.core.carver import ThumbnailCarver
+
+        folder = tmp_path / "batch_keep"
+        folder.mkdir()
+
+        thumb_bytes = create_healthy_jpeg(width=160, height=120)
+        donor = folder / "donor.jpg"
+        donor.write_bytes(create_jpeg_with_exif_thumb(thumb_bytes, width=800, height=600))
+
+        cand = folder / "cand.jpg"
+        cand.write_bytes(create_candidate_jpeg(width=800, height=600, zero_prefix_len=512))
+
+        code = main(["batch-heal", str(folder), "--auto-donor", "--keep-donor-thumbnail"])
+        assert code == 0
+
+        healed = folder / "cand_HEALED.jpg"
+        assert healed.exists()
+        assert JpegValidator.validate(healed).is_valid
+        assert ThumbnailCarver().extract_exif_thumbnail(healed) is not None
 
 
 class TestCliQuarantine:

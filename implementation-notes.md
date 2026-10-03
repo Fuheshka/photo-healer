@@ -739,14 +739,15 @@ src/photo_healer/
    - `dist/photo-healer-gui.exe` (50.17 МБ): оконный GUI на PySide6.
    - `dist/checksums.txt`: файл контрольных сумм SHA-256.
    - `dist/release_notes.md`: структурированные примечания к релизу в стиле Flowseal / Confeden.
-3. **Контрольные суммы SHA-256**:
-   - `4d929323741a1a4d0bf0c0326fef048b6482c0d53dbd56b7167a630d4f8b6aa4  photo-healer.exe`
-   - `b41b1d275079908c982e57038b16ad7c4dbb57e70300ece7296845a8492631a4  photo-healer-gui.exe`
-   - `649cec55a7a276c51166c5a7b7cb46cdba2e95a26c4ee83ef98f8d2aaea58efa  photo-healer-v1.0.0-windows-x64.zip`
-4. **Соблюдение регламента безопасности (Security Gate)**:
-   - Черновик примечаний к релизу и точная команда `gh release create` представлены пользователю.
-   - Запрошено явное подтверждение пользователя на публикацию.
-   - По выбору пользователя публикация на GitHub отложена: все проверенные ассеты, релизный архив и описание сохранены в каталоге `dist/` и готовы к публикации в любой момент.
+3. **Контрольные суммы SHA-256 (после сборки с иконкой)**:
+   - `1c7585e878dee370a09aa87f9499a86d9dc8cdc29abba250611adc219944da3f  photo-healer.exe`
+   - `b63361253161f0056328e14e088625ac29c0c2f6fc8b44602a5daf33cf982d95  photo-healer-gui.exe`
+   - `18b5af6bfa74620c702bc96d6965721f1c8729145d8f86a7eff4a3c1413e93c5  photo-healer-v1.0.0-windows-x64.zip`
+4. **Соблюдение регламента безопасности и публикация**:
+   - Предварительный аудит: 400 тестов pytest успешно пройдено (100% pass).
+   - Синхронизация репозитория: `git push origin master` (коммиты 843cbce..4cdc284 опубликованы в origin).
+   - Публикация релиза на GitHub: выполнен вызов `gh release create v1.0.0` с прикреплением 4 ассетов.
+   - Ссылка на опубликованный релиз: https://github.com/Fuheshka/photo-healer/releases/tag/v1.0.0
 
 
 ## Prompt 10: Фирменная тактильная иконка Apple HIG и интеграция в PySide6 / PyInstaller (2026-10-03)
@@ -775,4 +776,41 @@ src/photo_healer/
 5. **Тестирование и валидация (`tests/test_icon.py`)**:
    - Написаны и пройдены 4 специализированных теста: целостность `assets/icon.png`, наличие 7 слоев в `assets/icon.ico`, разрешение путей в dev и `_MEIPASS`, загрузка валидного `QIcon`.
    - Полный тестовый набор проекта: 400 passed (100%).
+
+
+## Prompt 11: Очистка донорских превью (EXIF IFD1 / MPF) в HeaderSplicer и флаг --strip-thumbnail (2026-10-03)
+
+### Цель
+Устранить дефект одинаковых миниатюр у восстановленных фотографий: при использовании одного донора все вылеченные файлы наследовали превью донора из EXIF IFD1 и MPF APP2. Проводник Windows и просмотрщики читали устаревшую миниатюру вместо декодирования реального содержимого фото. Требовалось реализовать очистку донорских миниатюр по умолчанию в `HeaderSplicer`, добавить флаги `--strip-thumbnail` и `--keep-donor-thumbnail` в команды `heal` и `batch-heal`, с сохранением полной валидности JPEG и метаданных камеры (IFD0, ExifIFD).
+
+### Архитектурные решения и компромиссы (Tradeoffs & Decisions)
+1. **Инвариант сохранности EXIF метаданных (Safe In-Place Unlink)**:
+   - В EXIF APP1 смещения тегов (Make, Model, DateTimeOriginal, ExifIFDPointer, GPSInfo, MakerNotes) вычисляются относительно начала заголовка TIFF.
+   - Физическое удаление или вырезание байтов из середины APP1 сместило бы все последующие указатели и привело бы к повреждению метаданных камеры и MakerNotes.
+   - *Решение*: Выполняется безопасное обнуление указателя `next_ifd_offset` в конце IFD0 (установка 4 байт в `0x00000000`), обнуление значений тегов 0x0201 (`JPEGInterchangeFormat`) и 0x0202 (`JPEGInterchangeFormatLength`), и зануление диапазона байтов самого превью (`b"\x00"`). Это исключает чтение превью парсерами и сканерами сырых SOI-маркеров, оставляя всю структуру IFD0 и ExifIFD на 100% нетронутой.
+2. **Селективное удаление контейнера APP2 MPF (Multi-Picture Format)**:
+   - Сегмент APP2 может содержать как MPF (указатели на вторичные изображения донора), так и ICC цветовые профили (`b"ICC_PROFILE\x00"`).
+   - *Решение*: При обработке маркеров заголовка фильтруются и полностью исключаются только сегменты APP2 с сигнатурой `b"MPF\x00"`. ICC-профили и другие прикладные сегменты бережно сохраняются.
+3. **Чистый Python stdlib без внешних зависимостей (Ponytail)**:
+   - Вся логика реализована через стандартные модули `struct` и `bytes`/`bytearray`.
+4. **Эргономика CLI и двуязычная локализация (`app-i18n-localization`)**:
+   - В команды `heal` и `batch-heal` добавлены флаги:
+     - `--strip-thumbnail`: включен по умолчанию (`action="store_true"`, `default=True`).
+     - `--keep-donor-thumbnail`: возможность принудительного сохранения превью донора (`action="store_true"`, `default=False`).
+   - Добавлены ключи локализации (EN/RU) в словарь `TRANSLATIONS` в `i18n.py`.
+
+### Тестирование и верификация
+- `tests/test_splicer.py`:
+  - `test_strip_donor_thumbnail_exif_ifd1_default`: проверка очистки превью по умолчанию в little-endian EXIF.
+  - `test_strip_donor_thumbnail_exif_ifd1_big_endian`: проверка очистки в big-endian (`MM`) EXIF.
+  - `test_keep_donor_thumbnail_flag`: проверка сохранения превью при `strip_thumbnail=False`.
+  - `test_strip_donor_thumbnail_mpf_app2`: проверка удаления MPF сегмента и сохранения ICC профиля.
+  - `test_strip_donor_thumbnail_ifd0_direct`: проверка обработки устаревших/нестандартных EXIF с превью в IFD0.
+- `tests/test_cli.py`:
+  - `test_heal_strips_donor_thumbnail_by_default`: проверка очистки превью командой `heal`.
+  - `test_heal_keep_donor_thumbnail`: проверка флага `--keep-donor-thumbnail` в команде `heal`.
+  - `test_heal_explicit_strip_thumbnail`: проверка флага `--strip-thumbnail` в команде `heal`.
+  - `test_batch_heal_strips_donor_thumbnail_by_default`: проверка очистки в пакетном режиме `batch-heal`.
+  - `test_batch_heal_keep_donor_thumbnail`: проверка сохранения в `batch-heal` с `--keep-donor-thumbnail`.
+- Сквозной прогон: 411 passed (100%).
 

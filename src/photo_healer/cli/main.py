@@ -460,7 +460,8 @@ def handle_heal(args: argparse.Namespace) -> int:
 
     # Splice donor header with live bitstream
     try:
-        splicer = HeaderSplicer(donor_header)
+        strip_thumb = not getattr(args, "keep_donor_thumbnail", False)
+        splicer = HeaderSplicer(donor_header, strip_thumbnail=strip_thumb)
         splice_res = splicer.splice_target(broken_bytes, entropy_offset=detected_offset)
     except Exception as e:
         sys.stderr.write(t("heal.error.splice_failed", error=e, default=f"Error splicing donor header: {e}") + "\n")
@@ -473,6 +474,10 @@ def handle_heal(args: argparse.Namespace) -> int:
         if not args.quiet:
             print(t("heal.dry_run.header", src=broken_path.name, dst=out_path.name, default=f"[DRY-RUN] Would heal: {broken_path.name} -> {out_path.name}"))
             print(t("heal.dry_run.donor_header", size=len(donor_header), default=f"  Donor header  : {len(donor_header)} bytes"))
+            if not strip_thumb:
+                print(t("heal.dry_run.donor_thumb_keep", default="  Donor thumb   : Preserved (--keep-donor-thumbnail)"))
+            else:
+                print(t("heal.dry_run.donor_thumb_strip", default="  Donor thumb   : Stripped (true photo preview)"))
             print(t("heal.dry_run.entropy_start", offset=splice_res.entropy_offset, default=f"  Entropy start : offset {splice_res.entropy_offset}"))
             print(t("heal.dry_run.total_size", size=format_size(splice_res.total_bytes), default=f"  Total size    : {format_size(splice_res.total_bytes)}"))
             if val.is_valid:
@@ -611,7 +616,8 @@ def handle_batch_heal(args: argparse.Namespace) -> int:
                     progress.update(1, cand.name)
                     continue
 
-            splicer = HeaderSplicer(donor_header)
+            strip_thumb = not getattr(args, "keep_donor_thumbnail", False)
+            splicer = HeaderSplicer(donor_header, strip_thumbnail=strip_thumb)
             splice_res = splicer.splice_target(cand_bytes, entropy_offset=detected_offset)
 
             if not args.dry_run:
@@ -1021,6 +1027,18 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_heal.add_argument("--inplace", action="store_true", help=t("heal.arg.inplace", lang=lang, default="Replace original file in place (creates .bak backup)"))
     p_heal.add_argument("--force", action="store_true", help=t("heal.arg.force", lang=lang, default="Force overwrite existing destination or backup files"))
     p_heal.add_argument("--dry-run", action="store_true", help=t("heal.arg.dry_run", lang=lang, default="Simulate healing without writing to disk"))
+    p_heal.add_argument(
+        "--strip-thumbnail",
+        action="store_true",
+        default=True,
+        help=t("heal.arg.strip_thumbnail", lang=lang, default="Strip donor EXIF/MPF thumbnails to generate real preview from photo (enabled by default)"),
+    )
+    p_heal.add_argument(
+        "--keep-donor-thumbnail",
+        action="store_true",
+        default=False,
+        help=t("heal.arg.keep_donor_thumbnail", lang=lang, default="Preserve donor thumbnails instead of stripping them"),
+    )
     p_heal.add_argument("--quiet", action="store_true", help=t("heal.arg.quiet", lang=lang, default="Suppress progress and informational logs"))
     p_heal.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_heal.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
@@ -1038,6 +1056,18 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_batch.add_argument("--inplace", action="store_true", help=t("batch_heal.arg.inplace", lang=lang, default="Replace original files in place (creates .bak backups)"))
     p_batch.add_argument("--force", action="store_true", help=t("batch_heal.arg.force", lang=lang, default="Force overwrite existing healed files or backups"))
     p_batch.add_argument("--dry-run", action="store_true", help=t("batch_heal.arg.dry_run", lang=lang, default="Simulate batch healing without writing files"))
+    p_batch.add_argument(
+        "--strip-thumbnail",
+        action="store_true",
+        default=True,
+        help=t("batch_heal.arg.strip_thumbnail", lang=lang, default="Strip donor EXIF/MPF thumbnails to generate real preview from photo (enabled by default)"),
+    )
+    p_batch.add_argument(
+        "--keep-donor-thumbnail",
+        action="store_true",
+        default=False,
+        help=t("batch_heal.arg.keep_donor_thumbnail", lang=lang, default="Preserve donor thumbnails instead of stripping them"),
+    )
     p_batch.add_argument("--quiet", action="store_true", help=t("batch_heal.arg.quiet", lang=lang, default="Suppress progress bars and summary output"))
     p_batch.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_batch.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
