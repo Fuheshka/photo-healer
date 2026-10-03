@@ -19,11 +19,6 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
-from PIL import Image, ImageFile
-
-# Enable decoding of partially truncated / damaged forensic photo frames
-ImageFile.LOAD_TRUNCATED_IMAGES = True
-
 
 @dataclass(frozen=True)
 class FileProcessResult:
@@ -314,6 +309,15 @@ def rebuild_jpeg_thumbnail(
     """
     if not data.startswith(b"\xff\xd8"):
         raise ValueError("Invalid JPEG data: missing SOI marker")
+
+    try:
+        from PIL import Image, ImageFile
+        # Enable decoding of partially truncated / damaged forensic photo frames
+        ImageFile.LOAD_TRUNCATED_IMAGES = True
+    except ImportError:
+        raise ImportError(
+            "Pillow is required for thumbnail rebuilding. Install it with: pip install pillow"
+        )
 
     # 1. Decode frame and produce thumbnail JPEG in memory
     with Image.open(io.BytesIO(data)) as img:

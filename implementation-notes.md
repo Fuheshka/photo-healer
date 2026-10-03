@@ -890,6 +890,15 @@ src/photo_healer/
   - `TestHealViewStripThumbnailSetting`: наличие чекбокса, состояние по умолчанию, реактивный перевод, передача значения в `HealWorker`.
   - `TestMainWindowAndCarveViewIntegration`: наличие пунктов меню «Инструменты», кнопка в галерее превью, реактивный перевод.
 - Общий тестовый прогон: **449 passed** (100% прохождение).
+- Сборка бинарников через `scripts/build_binary.py`:
+  - В `src/photo_healer/core/thumbnail.py` импорт `PIL` сделан ленивым (внутри `rebuild_jpeg_thumbnail`), сохранив нулевую зависимость чистого CLI и соблюдение бюджета размера.
+  - Обновлены спецификации PyInstaller `pyinstaller.spec` и `pyinstaller_gui.spec` для включения модуля `photo_healer.core.thumbnail` и GUI-компонентов превью.
+  - Успешно собраны и верифицированы бинарники:
+    * `dist/photo-healer.exe`: 8.18 МБ (< 15 МБ бюджета, пройдена проверка `--version` и `triage --help`)
+    * `dist/photo-healer-gui.exe`: 51.24 МБ (пройдена проверка runtime startup dependencies)
+    * `dist/checksums.txt`: сгенерированы контрольные суммы SHA-256
+    * `dist/photo-healer-v0.2.0-windows-x64.zip`: собран релизный архив (59.86 МБ)
+
 
 
 

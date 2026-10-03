@@ -32,6 +32,7 @@ a = Analysis(
         "photo_healer.core.parser",
         "photo_healer.core.resync",
         "photo_healer.core.splicer",
+        "photo_healer.core.thumbnail",
         "photo_healer.core.validator",
     ],
     hookspath=[],
