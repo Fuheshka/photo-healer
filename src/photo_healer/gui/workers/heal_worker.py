@@ -18,6 +18,7 @@ from typing import Any, Sequence
 from PIL import Image
 from PySide6.QtCore import QObject, QThread, Signal
 
+from photo_healer.core.donor_pool import DonorIndex
 from photo_healer.core.entropy import EntropyAnalyzer
 from photo_healer.core.parser import JpegParser
 from photo_healer.core.resync import StreamResync
@@ -48,15 +49,40 @@ def find_matching_donor(
     candidate_path: Path,
     archive_root: Path | None = None,
     exclude: Path | None = None,
+    donor_index: DonorIndex | None = None,
 ) -> Path | None:
-    """Find the best donor JPEG for candidate using folder and EXIF heuristics.
+    """Find the best donor JPEG for candidate using DonorIndex or folder heuristics.
 
     Ranking:
-      1. Intact JPEG in the same folder with matching filename prefix (e.g. SANY, IMG)
-      2. Any intact JPEG in the same folder
-      3. Intact JPEG in parent folder
-      4. Intact JPEG anywhere in archive_root
+      1. DonorIndex multi-criteria ranking (Tier 1-4 or DQT/geometry) if provided or indexed
+      2. Intact JPEG in the same folder with matching filename prefix (legacy fallback)
+      3. Any intact JPEG in the same folder
+      4. Intact JPEG in parent folder
+      5. Intact JPEG anywhere in archive_root
     """
+    if donor_index is not None and len(donor_index) > 0:
+        matches = donor_index.find_best_donor(candidate_path, exclude=exclude)
+        if matches:
+            return matches[0].path
+
+    # Try building temporary index for immediate search dirs
+    search_dirs: list[Path] = [candidate_path.parent]
+    if candidate_path.parent.parent and candidate_path.parent.parent != candidate_path.parent:
+        search_dirs.append(candidate_path.parent.parent)
+    if archive_root and archive_root not in search_dirs and archive_root.is_dir():
+        search_dirs.append(archive_root)
+
+    temp_index = DonorIndex()
+    for s_dir in search_dirs:
+        if s_dir.is_dir():
+            temp_index.add_folder(s_dir, recursive=(s_dir == archive_root))
+
+    if len(temp_index) > 0:
+        matches = temp_index.find_best_donor(candidate_path, exclude=exclude)
+        if matches:
+            return matches[0].path
+
+    # Legacy fallback if temp_index could not find valid donor
     cand_name = candidate_path.name.upper()
     prefix = ""
     for ch in cand_name:
@@ -64,12 +90,6 @@ def find_matching_donor(
             prefix += ch
         else:
             break
-
-    search_dirs: list[Path] = [candidate_path.parent]
-    if candidate_path.parent.parent and candidate_path.parent.parent != candidate_path.parent:
-        search_dirs.append(candidate_path.parent.parent)
-    if archive_root and archive_root not in search_dirs and archive_root.is_dir():
-        search_dirs.append(archive_root)
 
     # 1. Look in same folder with prefix match
     folder = candidate_path.parent
@@ -167,6 +187,7 @@ class HealWorker(QThread):
         inplace: bool = False,
         archive_root: Path | str | None = None,
         strip_thumbnail: bool = True,
+        donor_index: DonorIndex | None = None,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -179,6 +200,7 @@ class HealWorker(QThread):
         self.inplace = inplace
         self.archive_root = Path(archive_root) if archive_root else None
         self.strip_thumbnail = strip_thumbnail
+        self.donor_index = donor_index
         self._is_stopped = False
 
     def stop(self) -> None:
@@ -247,7 +269,12 @@ class HealWorker(QThread):
             if self.manual_donor_path and self.manual_donor_path.is_file():
                 donor_file = self.manual_donor_path
             elif self.auto_donor:
-                donor_file = find_matching_donor(cand_path, archive_root=self.archive_root)
+                donor_file = find_matching_donor(
+                    cand_path,
+                    archive_root=self.archive_root,
+                    exclude=cand_path,
+                    donor_index=self.donor_index,
+                )
 
             if donor_file is None:
                 summary["skipped"] += 1

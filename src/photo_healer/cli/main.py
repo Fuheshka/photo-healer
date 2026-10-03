@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Sequence
 
 from photo_healer import __version__
+from photo_healer.core.donor_pool import DonorIndex
 from photo_healer.core.parser import JpegParser
 from photo_healer.core.entropy import EntropyAnalyzer
 from photo_healer.core.splicer import HeaderSplicer
@@ -53,6 +54,7 @@ ensure_windows_utf8()
 
 # ── Constants & Formats ───────────────────────────────────────────────────────
 CHUNK_SIZE = 65536
+ZERO_CHUNK: bytes = b"\x00" * CHUNK_SIZE
 
 IMAGE_MAGICS: dict[str, bytes] = {
     ".jpg": b"\xff\xd8\xff",
@@ -205,15 +207,19 @@ def classify_file(path: Path) -> dict[str, Any]:
         with open(path, "rb") as fh:
             offset = 0
             first_nz = -1
+            first_chunk = b""
             while True:
                 chunk = fh.read(CHUNK_SIZE)
                 if not chunk:
                     break
-                for idx, byte in enumerate(chunk):
-                    if byte != 0:
-                        first_nz = offset + idx
-                        break
-                if first_nz != -1:
+                if not first_chunk:
+                    first_chunk = chunk
+                if chunk == ZERO_CHUNK:
+                    offset += len(chunk)
+                    continue
+                trimmed = chunk.lstrip(b"\x00")
+                if trimmed:
+                    first_nz = offset + (len(chunk) - len(trimmed))
                     break
                 offset += len(chunk)
     except OSError as e:
@@ -229,18 +235,14 @@ def classify_file(path: Path) -> dict[str, Any]:
 
     if first_nz == 0:
         if expected_magic:
-            try:
-                with open(path, "rb") as fh:
-                    header = fh.read(len(expected_magic))
-                if header == expected_magic:
-                    result["status"] = "valid"
-                    result["note"] = t("classify.note.intact_magic", default="Intact file magic")
-                else:
-                    result["status"] = "other"
-                    hex_str = header[:8].hex(" ").upper()
-                    result["note"] = t("classify.note.unexpected_magic", magic=hex_str, default=f"Unexpected magic: {hex_str}")
-            except OSError as e:
-                result["note"] = t("classify.note.header_read_error", error=e, default=f"Header read error: {e}")
+            header = first_chunk[:len(expected_magic)]
+            if header == expected_magic:
+                result["status"] = "valid"
+                result["note"] = t("classify.note.intact_magic", default="Intact file magic")
+            else:
+                result["status"] = "other"
+                hex_str = header[:8].hex(" ").upper()
+                result["note"] = t("classify.note.unexpected_magic", magic=hex_str, default=f"Unexpected magic: {hex_str}")
         else:
             result["status"] = "other"
             result["note"] = t("classify.note.unknown_magic", ext=ext, default=f"Unknown magic for ext {ext}")
@@ -413,14 +415,51 @@ def handle_triage(args: argparse.Namespace) -> int:
 def handle_heal(args: argparse.Namespace) -> int:
     """Execute single photo header transplantation."""
     broken_path = Path(args.broken_file)
-    donor_path = Path(args.donor)
-
     if not broken_path.is_file():
         sys.stderr.write(t("heal.error.broken_not_found", path=broken_path, default=f"Error: Broken file does not exist: {broken_path}") + "\n")
         return 1
 
-    if not donor_path.is_file():
-        sys.stderr.write(t("heal.error.donor_not_found", path=donor_path, default=f"Error: Donor file does not exist: {donor_path}") + "\n")
+    donor_path: Path | None = None
+    if getattr(args, "donor", None):
+        donor_path = Path(args.donor)
+        if not donor_path.is_file():
+            sys.stderr.write(t("heal.error.donor_not_found", path=donor_path, default=f"Error: Donor file does not exist: {donor_path}") + "\n")
+            return 1
+    elif getattr(args, "donor_pool", None) or getattr(args, "donor_folder", None):
+        pool = DonorIndex()
+        if getattr(args, "donor_pool", None):
+            pool_file = Path(args.donor_pool)
+            if not pool_file.is_file():
+                sys.stderr.write(f"Error: Donor pool file does not exist: {pool_file}\n")
+                return 1
+            try:
+                pool = DonorIndex.load_from_json(pool_file)
+            except Exception as e:
+                sys.stderr.write(f"Error loading donor pool from {pool_file}: {e}\n")
+                return 1
+
+        if getattr(args, "donor_folder", None):
+            for f in args.donor_folder:
+                f_path = Path(f)
+                if f_path.is_dir():
+                    pool.add_folder(f_path, recursive=True)
+
+        if getattr(args, "save_pool", None):
+            try:
+                pool.save_to_json(args.save_pool)
+            except Exception as e:
+                sys.stderr.write(f"Warning: Failed to save donor pool to {args.save_pool}: {e}\n")
+
+        matches = pool.find_best_donor(broken_path)
+        if not matches:
+            sys.stderr.write(f"Error: No matching donor found in pool for {broken_path.name}\n")
+            return 1
+        best_match = matches[0]
+        donor_path = best_match.path
+        if not args.quiet:
+            print(f"Selected donor from pool: {donor_path.name} (score: {best_match.score:.2f}, reason: {best_match.match_reason})")
+    else:
+        sys.stderr.write("Error: Either --donor, --donor-folder, or --donor-pool must be specified.\n")
         return 1
 
     # Careful protection: determine destination and check overwrite
@@ -548,6 +587,32 @@ def handle_batch_heal(args: argparse.Namespace) -> int:
     if not args.quiet:
         print(t("batch_heal.info.found_candidates", count=len(candidates), default=f"Found {len(candidates)} heal candidates. Starting batch restoration..."))
 
+    donor_pool: DonorIndex | None = None
+    if getattr(args, "donor_pool", None):
+        pool_file = Path(args.donor_pool)
+        if not pool_file.is_file():
+            sys.stderr.write(f"Error: Donor pool file does not exist: {pool_file}\n")
+            return 1
+        try:
+            donor_pool = DonorIndex.load_from_json(pool_file)
+        except Exception as e:
+            sys.stderr.write(f"Error loading donor pool from {pool_file}: {e}\n")
+            return 1
+
+    if getattr(args, "donor_folder", None):
+        if donor_pool is None:
+            donor_pool = DonorIndex()
+        for f in args.donor_folder:
+            f_path = Path(f)
+            if f_path.is_dir():
+                donor_pool.add_folder(f_path, recursive=True)
+
+    if getattr(args, "save_pool", None) and donor_pool is not None:
+        try:
+            donor_pool.save_to_json(args.save_pool)
+        except Exception as e:
+            sys.stderr.write(f"Warning: Failed to save donor pool to {args.save_pool}: {e}\n")
+
     donor_header_cache: dict[Path, bytes] = {}
 
     def get_donor_header(d_path: Path) -> bytes | None:
@@ -571,6 +636,13 @@ def handle_batch_heal(args: argparse.Namespace) -> int:
         # Determine donor
         if forced_donor:
             donor = forced_donor
+        elif donor_pool and len(donor_pool) > 0:
+            matches = donor_pool.find_best_donor(cand)
+            donor = matches[0].path if matches else None
+            if donor is None:
+                skipped_count += 1
+                progress.update(1, cand.name)
+                continue
         else:
             donor = find_donor_in_folder(cand.parent, exclude=cand)
             if donor is None:
@@ -1133,7 +1205,23 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
         description=t("cmd.heal.desc", lang=lang, default="Transplant donor JPEG markers (DQT, DHT, SOF, SOS) onto damaged file."),
     )
     p_heal.add_argument("broken_file", help=t("heal.arg.broken_file", lang=lang, default="Path to damaged JPEG image"))
-    p_heal.add_argument("--donor", required=True, help=t("heal.arg.donor", lang=lang, default="Path to healthy donor JPEG image"))
+    p_heal.add_argument("--donor", help=t("heal.arg.donor", lang=lang, default="Path to healthy donor JPEG image"))
+    p_heal.add_argument(
+        "--donor-folder",
+        action="append",
+        default=[],
+        help=t("heal.arg.donor_folder", lang=lang, default="Folder containing healthy donor JPEGs (can be specified multiple times)"),
+    )
+    p_heal.add_argument(
+        "--donor-pool",
+        metavar="POOL_JSON",
+        help=t("heal.arg.donor_pool", lang=lang, default="Path to cached donor pool JSON index"),
+    )
+    p_heal.add_argument(
+        "--save-pool",
+        metavar="POOL_JSON",
+        help=t("heal.arg.save_pool", lang=lang, default="Save indexed donor pool to JSON file"),
+    )
     p_heal.add_argument("--output", metavar="DEST", help=t("heal.arg.output", lang=lang, default="Output file path (default: <name>_HEALED.jpg)"))
     p_heal.add_argument("--inplace", action="store_true", help=t("heal.arg.inplace", lang=lang, default="Replace original file in place (creates .bak backup)"))
     p_heal.add_argument("--force", action="store_true", help=t("heal.arg.force", lang=lang, default="Force overwrite existing destination or backup files"))
@@ -1163,6 +1251,22 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_batch.add_argument("folder", help=t("batch_heal.arg.folder", lang=lang, default="Folder containing damaged photos"))
     p_batch.add_argument("--donor", help=t("batch_heal.arg.donor", lang=lang, default="Explicit donor file to use for all candidates"))
     p_batch.add_argument("--auto-donor", action="store_true", help=t("batch_heal.arg.auto_donor", lang=lang, default="Automatically search for healthy donor in folder"))
+    p_batch.add_argument(
+        "--donor-folder",
+        action="append",
+        default=[],
+        help=t("batch_heal.arg.donor_folder", lang=lang, default="Folder containing healthy donor JPEGs (can be specified multiple times)"),
+    )
+    p_batch.add_argument(
+        "--donor-pool",
+        metavar="POOL_JSON",
+        help=t("batch_heal.arg.donor_pool", lang=lang, default="Path to cached donor pool JSON index"),
+    )
+    p_batch.add_argument(
+        "--save-pool",
+        metavar="POOL_JSON",
+        help=t("batch_heal.arg.save_pool", lang=lang, default="Save indexed donor pool to JSON file"),
+    )
     p_batch.add_argument("--output", metavar="DIR", help=t("batch_heal.arg.output", lang=lang, default="Output directory for healed photos"))
     p_batch.add_argument("--inplace", action="store_true", help=t("batch_heal.arg.inplace", lang=lang, default="Replace original files in place (creates .bak backups)"))
     p_batch.add_argument("--force", action="store_true", help=t("batch_heal.arg.force", lang=lang, default="Force overwrite existing healed files or backups"))

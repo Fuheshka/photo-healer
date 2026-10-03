@@ -590,3 +590,97 @@ class TestCliSubprocessExecutable:
         assert "batch-heal" in proc.stdout
         assert "quarantine" in proc.stdout
         assert "carve" in proc.stdout
+
+
+class TestCliDonorPool:
+    """Verifies CLI integration with donor pool flags."""
+
+    @pytest.fixture
+    def pool_cli_setup(self, tmp_path: Path):
+        donor_dir = tmp_path / "donors"
+        donor_dir.mkdir()
+        donor_file = donor_dir / "SANY0001.JPG"
+        donor_file.write_bytes(create_healthy_jpeg(640, 480))
+
+        damaged_dir = tmp_path / "damaged"
+        damaged_dir.mkdir()
+        broken_file = damaged_dir / "SANY0015.JPG"
+        broken_file.write_bytes(create_candidate_jpeg(640, 480, zero_prefix_len=2048))
+
+        return donor_dir, donor_file, damaged_dir, broken_file
+
+    def test_cli_heal_with_donor_folder(self, pool_cli_setup, tmp_path: Path):
+        donor_dir, donor_file, _, broken_file = pool_cli_setup
+        out_file = tmp_path / "out_healed.jpg"
+
+        code = main([
+            "heal",
+            str(broken_file),
+            "--donor-folder",
+            str(donor_dir),
+            "--output",
+            str(out_file),
+            "--quiet",
+        ])
+        assert code == 0
+        assert out_file.exists()
+        val = JpegValidator.validate(out_file)
+        assert val.is_valid is True
+
+    def test_cli_batch_heal_with_donor_folder_and_save_pool(self, pool_cli_setup, tmp_path: Path):
+        donor_dir, _, damaged_dir, _ = pool_cli_setup
+        out_dir = tmp_path / "batch_out"
+        pool_json = tmp_path / "pool.json"
+
+        code = main([
+            "batch-heal",
+            str(damaged_dir),
+            "--donor-folder",
+            str(donor_dir),
+            "--save-pool",
+            str(pool_json),
+            "--output",
+            str(out_dir),
+            "--quiet",
+        ])
+        assert code == 0
+        assert pool_json.exists()
+
+        # Check saved pool is valid JSON
+        data = json.loads(pool_json.read_text(encoding="utf-8"))
+        assert "entries" in data
+        assert len(data["entries"]) >= 1
+
+    def test_cli_heal_with_saved_donor_pool_json(self, pool_cli_setup, tmp_path: Path):
+        donor_dir, _, _, broken_file = pool_cli_setup
+        pool_json = tmp_path / "pool.json"
+
+        # Pre-build pool
+        from photo_healer.core.donor_pool import DonorIndex
+        idx = DonorIndex()
+        idx.add_folder(donor_dir)
+        idx.save_to_json(pool_json)
+
+        out_file = tmp_path / "pool_healed.jpg"
+        code = main([
+            "heal",
+            str(broken_file),
+            "--donor-pool",
+            str(pool_json),
+            "--output",
+            str(out_file),
+            "--quiet",
+        ])
+        assert code == 0
+        assert out_file.exists()
+        val = JpegValidator.validate(out_file)
+        assert val.is_valid is True
+
+    def test_cli_heal_missing_all_donor_options_fails(self, pool_cli_setup):
+        _, _, _, broken_file = pool_cli_setup
+        code = main([
+            "heal",
+            str(broken_file),
+        ])
+        assert code == 1
+
