@@ -33,6 +33,8 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QRadioButton,
+    QScrollArea,
+    QSizePolicy,
     QSplitter,
     QVBoxLayout,
     QWidget,
@@ -90,8 +92,25 @@ class HealView(QWidget):
         # ── 1. Left Control Panel ─────────────────────────────────────────────
         self.left_panel = QWidget(self.splitter)
         self.left_panel.setObjectName("healLeftPanel")
-        left_layout = QVBoxLayout(self.left_panel)
-        left_layout.setContentsMargins(14, 14, 14, 14)
+        self.left_panel.setMinimumWidth(280)
+        self.left_panel.setMaximumWidth(400)
+
+        left_outer_layout = QVBoxLayout(self.left_panel)
+        left_outer_layout.setContentsMargins(0, 0, 0, 0)
+        left_outer_layout.setSpacing(0)
+
+        # Scrollable upper area for Queue, Donor, Settings, and Log
+        self.left_scroll_area = QScrollArea(self.left_panel)
+        self.left_scroll_area.setObjectName("healLeftScroll")
+        self.left_scroll_area.setWidgetResizable(True)
+        self.left_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.left_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.left_scroll_area.setFrameShape(QFrame.Shape.NoFrame)
+
+        scroll_content = QWidget()
+        scroll_content.setObjectName("healLeftScrollContent")
+        left_layout = QVBoxLayout(scroll_content)
+        left_layout.setContentsMargins(14, 14, 14, 10)
         left_layout.setSpacing(12)
 
         # 1.1 Candidate Queue Box
@@ -108,9 +127,10 @@ class HealView(QWidget):
         # Candidate List
         self.list_candidates = QListWidget()
         self.list_candidates.setObjectName("listCandidates")
-        self.list_candidates.setMinimumHeight(130)
+        self.list_candidates.setMinimumHeight(90)
+        self.list_candidates.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.MinimumExpanding)
         self.list_candidates.currentItemChanged.connect(self._on_candidate_selection_changed)
-        left_layout.addWidget(self.list_candidates, 2)
+        left_layout.addWidget(self.list_candidates, 1)
 
         # Queue buttons
         btn_queue_layout = QHBoxLayout()
@@ -127,7 +147,7 @@ class HealView(QWidget):
         left_layout.addLayout(btn_queue_layout)
 
         # 1.2 Donor Pool Manager
-        self.donor_pool_widget = DonorPoolWidget(self.left_panel)
+        self.donor_pool_widget = DonorPoolWidget(scroll_content)
         self.donor_pool_widget.donor_changed.connect(self._reload_preview)
         left_layout.addWidget(self.donor_pool_widget)
 
@@ -141,7 +161,7 @@ class HealView(QWidget):
         self.lbl_donor_drop_hint = self.donor_pool_widget.lbl_donor_drop_hint
 
         # 1.3 Restoration Settings Box
-        self.settings_group = QFrame(self.left_panel)
+        self.settings_group = QFrame(scroll_content)
         self.settings_group.setObjectName("settingsCard")
         settings_layout = QVBoxLayout(self.settings_group)
         settings_layout.setContentsMargins(12, 12, 12, 12)
@@ -171,36 +191,7 @@ class HealView(QWidget):
 
         left_layout.addWidget(self.settings_group)
 
-        # 1.4 Action Buttons
-        self.action_layout = QVBoxLayout()
-        self.action_layout.setSpacing(8)
-
-        self.btn_heal_single = QPushButton(t("heal.action.heal_single"))
-        self.btn_heal_single.setObjectName("btnHealSingle")
-        self.btn_heal_single.clicked.connect(self._heal_current_file)
-        self.action_layout.addWidget(self.btn_heal_single)
-
-        self.btn_heal_batch = QPushButton(t("heal.action.heal_batch", count=0))
-        self.btn_heal_batch.setObjectName("btnHealBatch")
-        self.btn_heal_batch.clicked.connect(self._start_batch_heal)
-        self.action_layout.addWidget(self.btn_heal_batch)
-
-        self.btn_stop_batch = QPushButton(t("heal.action.stop_batch"))
-        self.btn_stop_batch.setObjectName("btnStopBatch")
-        self.btn_stop_batch.setVisible(False)
-        self.btn_stop_batch.clicked.connect(self._stop_batch_heal)
-        self.action_layout.addWidget(self.btn_stop_batch)
-
-        left_layout.addLayout(self.action_layout)
-
-        # Batch Progress Bar
-        self.batch_progress = QProgressBar()
-        self.batch_progress.setFixedHeight(14)
-        self.batch_progress.setTextVisible(False)
-        self.batch_progress.setVisible(False)
-        left_layout.addWidget(self.batch_progress)
-
-        # Operation Log Console
+        # Operation Log Console (inside scrollable upper area)
         self.lbl_log_title = QLabel(t("heal.log.title"))
         self.lbl_log_title.setStyleSheet("font-size: 11px; font-weight: 600; color: #71717a;")
         left_layout.addWidget(self.lbl_log_title)
@@ -208,8 +199,45 @@ class HealView(QWidget):
         self.log_view = QPlainTextEdit()
         self.log_view.setObjectName("logView")
         self.log_view.setReadOnly(True)
-        self.log_view.setMaximumHeight(110)
+        self.log_view.setMinimumHeight(70)
+        self.log_view.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         left_layout.addWidget(self.log_view, 1)
+
+        self.left_scroll_area.setWidget(scroll_content)
+        left_outer_layout.addWidget(self.left_scroll_area, 1)
+
+        # 1.4 Fixed / Pinned Action Buttons at the bottom outside of scroll
+        self.bottom_action_widget = QWidget(self.left_panel)
+        self.bottom_action_widget.setObjectName("healBottomActions")
+        bottom_action_layout = QVBoxLayout(self.bottom_action_widget)
+        bottom_action_layout.setContentsMargins(14, 10, 14, 12)
+        bottom_action_layout.setSpacing(8)
+
+        self.btn_heal_single = QPushButton(t("heal.action.heal_single"))
+        self.btn_heal_single.setObjectName("btnHealSingle")
+        self.btn_heal_single.clicked.connect(self._heal_current_file)
+        bottom_action_layout.addWidget(self.btn_heal_single)
+
+        self.btn_heal_batch = QPushButton(t("heal.action.heal_batch", count=0))
+        self.btn_heal_batch.setObjectName("btnHealBatch")
+        self.btn_heal_batch.clicked.connect(self._start_batch_heal)
+        bottom_action_layout.addWidget(self.btn_heal_batch)
+
+        self.btn_stop_batch = QPushButton(t("heal.action.stop_batch"))
+        self.btn_stop_batch.setObjectName("btnStopBatch")
+        self.btn_stop_batch.setVisible(False)
+        self.btn_stop_batch.clicked.connect(self._stop_batch_heal)
+        bottom_action_layout.addWidget(self.btn_stop_batch)
+
+        # Batch Progress Bar
+        self.batch_progress = QProgressBar()
+        self.batch_progress.setFixedHeight(14)
+        self.batch_progress.setTextVisible(False)
+        self.batch_progress.setVisible(False)
+        bottom_action_layout.addWidget(self.batch_progress)
+
+        self.action_layout = bottom_action_layout
+        left_outer_layout.addWidget(self.bottom_action_widget, 0)
 
         self.splitter.addWidget(self.left_panel)
 
@@ -220,12 +248,26 @@ class HealView(QWidget):
         right_layout.setContentsMargins(0, 0, 0, 0)
         right_layout.setSpacing(0)
 
-        # 2.1 Top Toolbar
-        self.preview_toolbar = QFrame(self.right_panel)
+        # 2.1 Top Toolbar wrapped in horizontal scroll area
+        self.toolbar_scroll = QScrollArea(self.right_panel)
+        self.toolbar_scroll.setObjectName("previewToolbarScroll")
+        self.toolbar_scroll.setWidgetResizable(True)
+        self.toolbar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.toolbar_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.toolbar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.toolbar_scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.toolbar_scroll.setFixedHeight(44)
+
+        self.preview_toolbar = QFrame()
         self.preview_toolbar.setObjectName("previewToolbar")
-        tb_layout = QHBoxLayout(self.preview_toolbar)
-        tb_layout.setContentsMargins(14, 8, 14, 8)
-        tb_layout.setSpacing(8)
+        self.tb_vbox = QVBoxLayout(self.preview_toolbar)
+        self.tb_vbox.setContentsMargins(14, 6, 14, 6)
+        self.tb_vbox.setSpacing(6)
+
+        # Row 1: Mode Switcher + Separator + Zoom Controls (in wide mode) + Badge
+        self.tb_row1 = QHBoxLayout()
+        self.tb_row1.setContentsMargins(0, 0, 0, 0)
+        self.tb_row1.setSpacing(8)
 
         # View Mode Switcher: Split / Before / After
         self.view_btn_group = QButtonGroup(self)
@@ -234,59 +276,67 @@ class HealView(QWidget):
         self.btn_mode_split.setChecked(True)
         self.btn_mode_split.setObjectName("btnMode")
         self.view_btn_group.addButton(self.btn_mode_split)
-        tb_layout.addWidget(self.btn_mode_split)
+        self.tb_row1.addWidget(self.btn_mode_split)
 
         self.btn_mode_before = QPushButton(t("heal.preview.before"))
         self.btn_mode_before.setCheckable(True)
         self.btn_mode_before.setObjectName("btnMode")
         self.view_btn_group.addButton(self.btn_mode_before)
-        tb_layout.addWidget(self.btn_mode_before)
+        self.tb_row1.addWidget(self.btn_mode_before)
 
         self.btn_mode_after = QPushButton(t("heal.preview.after"))
         self.btn_mode_after.setCheckable(True)
         self.btn_mode_after.setObjectName("btnMode")
         self.view_btn_group.addButton(self.btn_mode_after)
-        tb_layout.addWidget(self.btn_mode_after)
+        self.tb_row1.addWidget(self.btn_mode_after)
 
         self.btn_mode_split.clicked.connect(lambda: self.preview_widget.set_view_mode("split"))
         self.btn_mode_before.clicked.connect(lambda: self.preview_widget.set_view_mode("before"))
         self.btn_mode_after.clicked.connect(lambda: self.preview_widget.set_view_mode("after"))
 
         # Separator line
-        sep = QFrame()
-        sep.setFrameShape(QFrame.Shape.VLine)
-        sep.setStyleSheet("color: #3f3f46;")
-        tb_layout.addWidget(sep)
+        self.sep_toolbar = QFrame()
+        self.sep_toolbar.setFrameShape(QFrame.Shape.VLine)
+        self.sep_toolbar.setStyleSheet("color: #3f3f46;")
+        self.tb_row1.addWidget(self.sep_toolbar)
 
         # Zoom buttons
         self.btn_zoom_out = QPushButton("-")
         self.btn_zoom_out.setObjectName("btnZoom")
         self.btn_zoom_out.setToolTip(t("heal.preview.zoom_out"))
         self.btn_zoom_out.clicked.connect(self._on_zoom_out)
-        tb_layout.addWidget(self.btn_zoom_out)
+        self.tb_row1.addWidget(self.btn_zoom_out)
 
         self.lbl_zoom = QLabel("Fit")
         self.lbl_zoom.setStyleSheet("font-size: 11px; font-weight: bold; color: #a1a1aa; min-width: 44px;")
         self.lbl_zoom.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        tb_layout.addWidget(self.lbl_zoom)
+        self.tb_row1.addWidget(self.lbl_zoom)
 
         self.btn_zoom_in = QPushButton("+")
         self.btn_zoom_in.setObjectName("btnZoom")
         self.btn_zoom_in.setToolTip(t("heal.preview.zoom_in"))
         self.btn_zoom_in.clicked.connect(self._on_zoom_in)
-        tb_layout.addWidget(self.btn_zoom_in)
+        self.tb_row1.addWidget(self.btn_zoom_in)
 
         self.btn_zoom_fit = QPushButton(t("heal.preview.zoom_fit"))
         self.btn_zoom_fit.setObjectName("btnZoomAction")
         self.btn_zoom_fit.clicked.connect(self._on_zoom_fit)
-        tb_layout.addWidget(self.btn_zoom_fit)
+        self.tb_row1.addWidget(self.btn_zoom_fit)
 
         self.btn_zoom_100 = QPushButton(t("heal.preview.zoom_100"))
         self.btn_zoom_100.setObjectName("btnZoomAction")
         self.btn_zoom_100.clicked.connect(self._on_zoom_100)
-        tb_layout.addWidget(self.btn_zoom_100)
+        self.tb_row1.addWidget(self.btn_zoom_100)
 
-        tb_layout.addStretch(1)
+        self._zoom_widgets = [
+            self.btn_zoom_out,
+            self.lbl_zoom,
+            self.btn_zoom_in,
+            self.btn_zoom_fit,
+            self.btn_zoom_100,
+        ]
+
+        self.tb_row1_stretch = self.tb_row1.addStretch(1)
 
         # Metadata pill
         self.lbl_stats_badge = QLabel("")
@@ -295,9 +345,23 @@ class HealView(QWidget):
             "border-radius: 6px; padding: 4px 10px; font-size: 11px; font-weight: 600;"
         )
         self.lbl_stats_badge.setVisible(False)
-        tb_layout.addWidget(self.lbl_stats_badge)
+        self.tb_row1.addWidget(self.lbl_stats_badge)
 
-        right_layout.addWidget(self.preview_toolbar)
+        self.tb_vbox.addLayout(self.tb_row1)
+
+        # Row 2: Zoom controls in narrow layout (<600px)
+        self.tb_row2_widget = QWidget(self.preview_toolbar)
+        self.tb_row2 = QHBoxLayout(self.tb_row2_widget)
+        self.tb_row2.setContentsMargins(0, 0, 0, 0)
+        self.tb_row2.setSpacing(8)
+        self.tb_row2_stretch = self.tb_row2.addStretch(1)
+        self.tb_row2_widget.setVisible(False)
+        self.tb_vbox.addWidget(self.tb_row2_widget)
+
+        self._is_toolbar_narrow: bool = False
+
+        self.toolbar_scroll.setWidget(self.preview_toolbar)
+        right_layout.addWidget(self.toolbar_scroll, 0)
 
         # 2.2 Split Preview Canvas
         self.preview_widget = SplitPreviewWidget(self.right_panel)
@@ -318,9 +382,10 @@ class HealView(QWidget):
         right_layout.addWidget(self.info_bar)
 
         self.splitter.addWidget(self.right_panel)
-        self.splitter.setStretchFactor(0, 0)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([340, 740])
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 3)
+        self.splitter.setSizes([280, 840])
+        self.splitter.splitterMoved.connect(lambda pos, idx: self._update_toolbar_layout(self.right_panel.width()))
 
         root_layout.addWidget(self.splitter)
 
@@ -330,12 +395,32 @@ class HealView(QWidget):
                 background-color: #18181b;
                 border-right: 1px solid #27272a;
             }
+            QScrollArea#healLeftScroll {
+                background-color: transparent;
+                border: none;
+            }
+            QWidget#healLeftScrollContent {
+                background-color: transparent;
+            }
+            QWidget#healBottomActions {
+                background-color: #18181b;
+                border-top: 1px solid #27272a;
+            }
             QWidget#healRightPanel {
                 background-color: #121214;
             }
-            QFrame#previewToolbar, QFrame#infoBar {
+            QScrollArea#previewToolbarScroll {
                 background-color: #18181b;
                 border-bottom: 1px solid #27272a;
+            }
+            QFrame#previewToolbar {
+                background-color: #18181b;
+                border: none;
+            }
+            QFrame#infoBar {
+                background-color: #18181b;
+                border-top: 1px solid #27272a;
+                border-bottom: none;
             }
             QFrame#infoBar {
                 border-bottom: none;
@@ -453,6 +538,45 @@ class HealView(QWidget):
                 font-size: 12px;
             }
         """)
+
+    def showEvent(self, event) -> None:
+        """Ensure layout is updated when tab becomes visible."""
+        super().showEvent(event)
+        if hasattr(self, "right_panel") and self.right_panel.width() > 0:
+            self._update_toolbar_layout(self.right_panel.width())
+
+    def resizeEvent(self, event) -> None:
+        """Handle dynamic layout adjustments when view is resized."""
+        super().resizeEvent(event)
+        if hasattr(self, "right_panel"):
+            self._update_toolbar_layout(self.right_panel.width())
+
+    def _update_toolbar_layout(self, width: int) -> None:
+        """Dynamically adapt preview toolbar layout based on right panel width."""
+        if width <= 0:
+            return
+        is_narrow = width < 600
+        if getattr(self, "_is_toolbar_narrow", None) == is_narrow:
+            return
+        self._is_toolbar_narrow = is_narrow
+
+        if is_narrow:
+            self.sep_toolbar.setVisible(False)
+            for w in self._zoom_widgets:
+                self.tb_row1.removeWidget(w)
+                self.tb_row2.insertWidget(self.tb_row2.count() - 1, w)
+            self.tb_row2_widget.setVisible(True)
+            if hasattr(self, "toolbar_scroll"):
+                self.toolbar_scroll.setFixedHeight(74)
+        else:
+            self.sep_toolbar.setVisible(True)
+            self.tb_row2_widget.setVisible(False)
+            sep_idx = self.tb_row1.indexOf(self.sep_toolbar)
+            for offset, w in enumerate(self._zoom_widgets):
+                self.tb_row2.removeWidget(w)
+                self.tb_row1.insertWidget(sep_idx + 1 + offset, w)
+            if hasattr(self, "toolbar_scroll"):
+                self.toolbar_scroll.setFixedHeight(44)
 
     def _retranslate_ui(self) -> None:
         """Update localized UI text across buttons and labels."""

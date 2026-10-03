@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import QFileInfo, Qt, QUrl
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QIcon
+from PySide6.QtGui import QAction, QActionGroup, QDragEnterEvent, QDropEvent, QIcon
 from PySide6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QProgressBar,
     QPushButton,
+    QSizePolicy,
     QStatusBar,
     QTabWidget,
     QVBoxLayout,
@@ -276,6 +277,7 @@ class MainWindow(QMainWindow):
 
         # Connect live reactive localization
         i18n.language_changed.connect(self._retranslate_ui)
+        self._update_responsive_layout(self.width())
 
     def _init_ui(self) -> None:
         # ── 0. Top Menu Bar ───────────────────────────────────────────────────
@@ -285,6 +287,24 @@ class MainWindow(QMainWindow):
         self.act_fix_previews.triggered.connect(self._open_fix_previews_dialog)
         self.act_clear_cache = self.menu_tools.addAction(t("tools.clear_cache"))
         self.act_clear_cache.triggered.connect(self._on_clear_cache_triggered)
+
+        # Language Menu (shown when window width < 700)
+        self.menu_language = self.menu_bar.addMenu(t("lang.switch"))
+        self.lang_action_group = QActionGroup(self)
+        self.lang_action_group.setExclusive(True)
+
+        self.act_lang_ru = self.menu_language.addAction("Русский (RU)")
+        self.act_lang_ru.setCheckable(True)
+        self.lang_action_group.addAction(self.act_lang_ru)
+        self.act_lang_ru.triggered.connect(lambda: self._set_language_from_menu("ru"))
+
+        self.act_lang_en = self.menu_language.addAction("English (EN)")
+        self.act_lang_en.setCheckable(True)
+        self.lang_action_group.addAction(self.act_lang_en)
+        self.act_lang_en.triggered.connect(lambda: self._set_language_from_menu("en"))
+
+        self._sync_language_menu()
+        self.menu_language.menuAction().setVisible(False)
 
         central_widget = QWidget(self)
         central_widget.setObjectName("centralWidget")
@@ -303,26 +323,32 @@ class MainWindow(QMainWindow):
 
         self.lbl_folder = QLabel(t("folder.label"))
         self.lbl_folder.setStyleSheet("font-size: 13px; font-weight: 600; color: #f4f4f5;")
+        self.lbl_folder.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         top_layout.addWidget(self.lbl_folder)
 
         self.txt_folder = QLineEdit()
         self.txt_folder.setPlaceholderText(t("folder.placeholder"))
+        self.txt_folder.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.txt_folder.setMinimumWidth(120)
         self.txt_folder.textChanged.connect(self._on_folder_text_changed)
         top_layout.addWidget(self.txt_folder, 1)
 
         self.btn_browse = QPushButton(t("folder.browse"))
         self.btn_browse.setObjectName("btnBrowse")
+        self.btn_browse.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.btn_browse.clicked.connect(self._browse_folder)
         top_layout.addWidget(self.btn_browse)
 
         self.btn_scan = QPushButton(t("folder.scan"))
         self.btn_scan.setObjectName("btnScan")
+        self.btn_scan.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.btn_scan.clicked.connect(self._toggle_scan)
         top_layout.addWidget(self.btn_scan)
 
-        # Language Switcher
+        # Language Switcher (in top bar for width >= 700)
         self.combo_lang = QComboBox()
         self.combo_lang.setObjectName("langSwitcher")
+        self.combo_lang.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         self.combo_lang.addItem("RU", "ru")
         self.combo_lang.addItem("EN", "en")
 
@@ -364,16 +390,22 @@ class MainWindow(QMainWindow):
 
         self.lbl_status = QLabel(t("status.ready"))
         self.lbl_status.setStyleSheet("color: #60a5fa; font-weight: 500;")
+        self.lbl_status.setMinimumWidth(80)
+        self.lbl_status.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.status_bar.addWidget(self.lbl_status, 1)
 
         self.lbl_metric_files = QLabel(t("metric.files", count=0))
+        self.lbl_metric_files.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.status_bar.addPermanentWidget(self.lbl_metric_files)
 
         self.lbl_metric_size = QLabel(t("metric.total_size", size=format_size(0)))
+        self.lbl_metric_size.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         self.status_bar.addPermanentWidget(self.lbl_metric_size)
 
         self.progress_bar = QProgressBar(self)
-        self.progress_bar.setFixedWidth(160)
+        self.progress_bar.setMinimumWidth(100)
+        self.progress_bar.setMaximumWidth(180)
+        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.progress_bar.setVisible(False)
         self.status_bar.addPermanentWidget(self.progress_bar)
 
@@ -444,6 +476,39 @@ class MainWindow(QMainWindow):
             self.combo_lang.blockSignals(True)
             self.combo_lang.setCurrentIndex(idx)
             self.combo_lang.blockSignals(False)
+        self._sync_language_menu()
+
+    def _set_language_from_menu(self, lang: str) -> None:
+        """Set language from menu action and ensure menu checks are synced."""
+        set_language(lang)
+        self._sync_language_menu()
+
+    def _sync_language_menu(self) -> None:
+        """Keep the menu bar language items in sync with active language."""
+        cur_lang = get_language()
+        if hasattr(self, "act_lang_ru"):
+            self.act_lang_ru.blockSignals(True)
+            self.act_lang_ru.setChecked(cur_lang == "ru")
+            self.act_lang_ru.blockSignals(False)
+        if hasattr(self, "act_lang_en"):
+            self.act_lang_en.blockSignals(True)
+            self.act_lang_en.setChecked(cur_lang == "en")
+            self.act_lang_en.blockSignals(False)
+        if hasattr(self, "menu_language"):
+            self.menu_language.setTitle(t("lang.switch"))
+
+    def resizeEvent(self, event) -> None:
+        """Handle adaptive UI transitions on window resize."""
+        super().resizeEvent(event)
+        self._update_responsive_layout(self.width())
+
+    def _update_responsive_layout(self, width: int) -> None:
+        """Adapt top bar and menu items based on window width."""
+        is_compact = width < 700
+        if hasattr(self, "combo_lang"):
+            self.combo_lang.setVisible(not is_compact)
+        if hasattr(self, "menu_language"):
+            self.menu_language.menuAction().setVisible(is_compact)
 
     def _open_fix_previews_dialog(self) -> None:
         """Open the thumbnail fix dialog."""

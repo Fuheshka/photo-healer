@@ -223,14 +223,22 @@ class CarveView(QWidget):
         root_layout.setSpacing(12)
 
         # ── 1. Header Toolbar ─────────────────────────────────────────────────
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
+        self.toolbar_widget = QWidget(self)
+        self.toolbar_vbox = QVBoxLayout(self.toolbar_widget)
+        self.toolbar_vbox.setContentsMargins(0, 0, 0, 0)
+        self.toolbar_vbox.setSpacing(6)
+
+        # Row 1: Search & Filter controls + scan button + status + progress
+        self.row1_widget = QWidget(self.toolbar_widget)
+        self.row1_layout = QHBoxLayout(self.row1_widget)
+        self.row1_layout.setContentsMargins(0, 0, 0, 0)
+        self.row1_layout.setSpacing(8)
 
         # Scan / Stop Button
         self.btn_scan = QPushButton(t("carve.btn.extract"))
         self.btn_scan.setObjectName("btnExtract")
         self.btn_scan.clicked.connect(self._toggle_scan)
-        toolbar.addWidget(self.btn_scan)
+        self.row1_layout.addWidget(self.btn_scan)
 
         # Type Filter
         self.combo_filter = QComboBox()
@@ -240,57 +248,82 @@ class CarveView(QWidget):
         self.combo_filter.addItem(t("carve.filter.exif"), "exif_thumb")
         self.combo_filter.addItem(t("carve.filter.raw"), "raw_carved")
         self.combo_filter.currentIndexChanged.connect(self._on_filter_changed)
-        toolbar.addWidget(self.combo_filter)
+        self.row1_layout.addWidget(self.combo_filter)
 
         # Filename Search Box
         self.txt_search = QLineEdit()
         self.txt_search.setPlaceholderText(t("carve.search.placeholder"))
         self.txt_search.textChanged.connect(self._on_filter_changed)
-        self.txt_search.setFixedWidth(200)
-        toolbar.addWidget(self.txt_search)
+        self.txt_search.setMinimumWidth(100)
+        self.txt_search.setMaximumWidth(200)
+        self.txt_search.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
+        self.row1_layout.addWidget(self.txt_search)
 
         # Counter / Status
         self.lbl_status = QLabel(t("carve.status.ready"))
         self.lbl_status.setStyleSheet("color: #a1a1aa; font-size: 12px;")
-        toolbar.addWidget(self.lbl_status)
+        self.row1_layout.addWidget(self.lbl_status)
 
         # Progress bar (hidden by default)
         self.progress_bar = QProgressBar(self)
-        self.progress_bar.setFixedWidth(130)
+        self.progress_bar.setMinimumWidth(80)
+        self.progress_bar.setMaximumWidth(130)
+        self.progress_bar.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed)
         self.progress_bar.setVisible(False)
-        toolbar.addWidget(self.progress_bar)
+        self.row1_layout.addWidget(self.progress_bar)
 
-        toolbar.addStretch()
+        self.row1_stretch = self.row1_layout.addStretch(1)
+
+        # Row 2: Action buttons (Selection, Export, Fix)
+        self.row2_widget = QWidget(self.toolbar_widget)
+        self.row2_layout = QHBoxLayout(self.row2_widget)
+        self.row2_layout.setContentsMargins(0, 0, 0, 0)
+        self.row2_layout.setSpacing(8)
 
         # Selection Buttons
         self.btn_select_all = QPushButton(t("carve.btn.select_all"))
         self.btn_select_all.setObjectName("btnActionSec")
         self.btn_select_all.clicked.connect(lambda: self.select_all(True))
-        toolbar.addWidget(self.btn_select_all)
+        self.row2_layout.addWidget(self.btn_select_all)
 
         self.btn_deselect_all = QPushButton(t("carve.btn.deselect_all"))
         self.btn_deselect_all.setObjectName("btnActionSec")
         self.btn_deselect_all.clicked.connect(lambda: self.select_all(False))
-        toolbar.addWidget(self.btn_deselect_all)
+        self.row2_layout.addWidget(self.btn_deselect_all)
 
         # Export Buttons
         self.btn_export_selected = QPushButton(t("carve.btn.export_selected"))
         self.btn_export_selected.setObjectName("btnExportSelected")
         self.btn_export_selected.clicked.connect(self.on_export_selected)
-        toolbar.addWidget(self.btn_export_selected)
+        self.row2_layout.addWidget(self.btn_export_selected)
 
         self.btn_export_all = QPushButton(t("carve.btn.export_all"))
         self.btn_export_all.setObjectName("btnExportAll")
         self.btn_export_all.clicked.connect(self.on_export_all)
-        toolbar.addWidget(self.btn_export_all)
+        self.row2_layout.addWidget(self.btn_export_all)
 
         # Fix Previews Button
         self.btn_fix_previews = QPushButton(t("carve.btn.fix_previews"))
         self.btn_fix_previews.setObjectName("btnActionSec")
         self.btn_fix_previews.clicked.connect(self._open_fix_previews_dialog)
-        toolbar.addWidget(self.btn_fix_previews)
+        self.row2_layout.addWidget(self.btn_fix_previews)
 
-        root_layout.addLayout(toolbar)
+        self.row2_stretch = self.row2_layout.addStretch(1)
+
+        self._action_widgets = [
+            self.btn_select_all,
+            self.btn_deselect_all,
+            self.btn_export_selected,
+            self.btn_export_all,
+            self.btn_fix_previews,
+        ]
+
+        self.toolbar_vbox.addWidget(self.row1_widget)
+        self.toolbar_vbox.addWidget(self.row2_widget)
+        root_layout.addWidget(self.toolbar_widget)
+
+        self._is_toolbar_narrow: bool = True
+        self._update_toolbar_layout(self.width() or 1080)
 
         # ── 2. Scrollable Grid Area ───────────────────────────────────────────
         self.scroll_area = QScrollArea(self)
@@ -390,9 +423,37 @@ class CarveView(QWidget):
         """Set active archive directory path."""
         self._archive_path = Path(path) if path else None
 
+    def showEvent(self, event) -> None:
+        """Ensure layout is updated when tab becomes visible."""
+        super().showEvent(event)
+        if self.width() > 0:
+            self._update_toolbar_layout(self.width())
+            self._relayout_cards()
+
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
+        self._update_toolbar_layout(self.width())
         self._relayout_cards()
+
+    def _update_toolbar_layout(self, width: int) -> None:
+        """Dynamically adapt gallery toolbar layout based on width."""
+        if width <= 0:
+            return
+        is_narrow = width < 1050
+        if getattr(self, "_is_toolbar_narrow", None) == is_narrow:
+            return
+        self._is_toolbar_narrow = is_narrow
+
+        if is_narrow:
+            for w in self._action_widgets:
+                self.row1_layout.removeWidget(w)
+                self.row2_layout.insertWidget(self.row2_layout.count() - 1, w)
+            self.row2_widget.setVisible(True)
+        else:
+            self.row2_widget.setVisible(False)
+            for w in self._action_widgets:
+                self.row2_layout.removeWidget(w)
+                self.row1_layout.addWidget(w)
 
     def _relayout_cards(self) -> None:
         """Rearrange visible cards into adaptive grid columns based on viewport width."""
@@ -404,9 +465,13 @@ class CarveView(QWidget):
 
         self.lbl_empty.setVisible(False)
 
+        # Clear prior card layout positions to prevent layout stacking
+        for card in visible_cards:
+            self.grid_layout.removeWidget(card)
+
         viewport_width = self.scroll_area.viewport().width()
         available_width = max(viewport_width - 24, CARD_WIDTH)
-        num_cols = max(1, available_width // (CARD_WIDTH + CARD_SPACING))
+        num_cols = max(1, (available_width + CARD_SPACING) // (CARD_WIDTH + CARD_SPACING))
 
         for idx, card in enumerate(visible_cards):
             row = idx // num_cols
