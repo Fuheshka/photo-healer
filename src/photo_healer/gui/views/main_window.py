@@ -578,10 +578,14 @@ class MainWindow(QMainWindow):
         self.progress_bar.setVisible(True)
         self.progress_bar.setRange(0, 0)  # indeterminate until total is known
 
+        # Suspend dynamic sorting on triage table while loading large volume of files
+        self.triage_view.proxy_model.setDynamicSortFilter(False)
+
         # Launch background worker
         self.worker = TriageWorker(folder, parent=self)
         self.worker.progress.connect(self._on_worker_progress)
-        self.worker.file_found.connect(self._on_worker_file_found)
+        self.worker.batch_found.connect(self._on_worker_batch_found)
+        self.worker.discovering.connect(self._on_worker_discovering)
         self.worker.finished.connect(self._on_worker_finished)
         self.worker.start()
 
@@ -590,6 +594,12 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText(t("status.cancelled", count=self._total_files))
             self.worker.stop()
             self.btn_scan.setEnabled(False)
+            self.triage_view.proxy_model.setDynamicSortFilter(True)
+            self.triage_view.proxy_model.invalidate()
+
+    def _on_worker_discovering(self, count: int, current_dir: str) -> None:
+        self.lbl_status.setText(t("status.discovering", count=count, folder=current_dir))
+        self.lbl_metric_files.setText(t("metric.files", count=count))
 
     def _on_worker_progress(self, current: int, total: int, filename: str) -> None:
         self.progress_bar.setRange(0, total)
@@ -604,18 +614,32 @@ class MainWindow(QMainWindow):
         )
 
     def _on_worker_file_found(self, record: dict[str, Any]) -> None:
-        self._total_files += 1
-        self._total_bytes += record.get("size", 0)
-        self.triage_view.add_file_record(record)
-        if record.get("status") == "healed_candidate":
-            self.heal_view.add_candidate(
-                record["path"],
-                select=(self.heal_view.current_candidate is None),
-            )
+        self._on_worker_batch_found([record])
+
+    def _on_worker_batch_found(self, batch: list[dict[str, Any]]) -> None:
+        if not batch:
+            return
+        self._total_files += len(batch)
+        batch_size = sum(rec.get("size", 0) for rec in batch)
+        self._total_bytes += batch_size
+
+        self.triage_view.add_file_records(batch)
+
+        for record in batch:
+            if record.get("status") == "healed_candidate":
+                self.heal_view.add_candidate(
+                    record["path"],
+                    select=(self.heal_view.current_candidate is None),
+                )
+
         self.lbl_metric_files.setText(t("metric.files", count=self._total_files))
         self.lbl_metric_size.setText(t("metric.total_size", size=format_size(self._total_bytes)))
 
     def _on_worker_finished(self, summary: dict[str, Any]) -> None:
+        # Re-enable dynamic sorting and refresh proxy view
+        self.triage_view.proxy_model.setDynamicSortFilter(True)
+        self.triage_view.proxy_model.invalidate()
+
         self.progress_bar.setVisible(False)
         self.btn_scan.setText(t("folder.scan"))
         self.btn_scan.setProperty("class", "")

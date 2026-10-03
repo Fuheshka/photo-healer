@@ -154,6 +154,20 @@ class TestTriageView:
         assert view._counts["errors"] == 1
         assert view._dummy_size == 5242880
 
+    def test_adding_records_batch(
+        self, qapp: QApplication, sample_records: list[dict[str, Any]]
+    ) -> None:
+        view = TriageView()
+        view.add_file_records(sample_records)
+
+        assert view.table_model.rowCount() == 4
+        assert view._counts["all"] == 4
+        assert view._counts["candidates"] == 1
+        assert view._counts["dummies"] == 1
+        assert view._counts["intact"] == 1
+        assert view._counts["errors"] == 1
+        assert view._dummy_size == 5242880
+
     def test_filter_buttons_switch_proxy_categories(
         self, qapp: QApplication, sample_records: list[dict[str, Any]]
     ) -> None:
@@ -202,11 +216,106 @@ class TestQuarantineDialog:
 
         assert dlg.dummy_count == 5
         assert dlg.dummy_size == 10485760
-        assert dlg.is_dry_run() is True  # Default is safe simulation
+        assert dlg.is_dry_run() is False  # Default is actual relocation (fixes no-op dry-run bug)
         assert dlg.get_destination() == dest_dir
+        assert dlg.btn_ok.text() != ""
+
+        # Toggle dry-run
+        dlg.chk_dry_run.setChecked(True)
+        assert dlg.is_dry_run() is True
 
         dlg.chk_dry_run.setChecked(False)
         assert dlg.is_dry_run() is False
+
+    def test_quarantine_execution_moves_files(
+        self, qapp: QApplication, tmp_path: Path, monkeypatch
+    ) -> None:
+        from unittest.mock import patch
+
+        archive_dir = tmp_path / "archive"
+        archive_dir.mkdir()
+        dummy_file = archive_dir / "zero.jpg"
+        dummy_file.write_bytes(b"\x00" * 1024)
+
+        view = TriageView()
+        view.set_archive_path(archive_dir)
+        rec = {
+            "name": "zero.jpg",
+            "path": str(dummy_file),
+            "size": 1024,
+            "status": "trim_zero",
+        }
+        view.add_file_record(rec)
+        assert view._counts["dummies"] == 1
+        assert view._dummy_size == 1024
+
+        dest_dir = tmp_path / "quarantine_target"
+
+        # Mock dialog exec to accept with default dry_run=False
+        def mock_exec(self_dlg):
+            self_dlg.dest_edit.setText(str(dest_dir))
+            self_dlg.chk_dry_run.setChecked(False)
+            return QDialog.DialogCode.Accepted
+
+        with patch.object(QuarantineDialog, "exec", mock_exec):
+            with patch("PySide6.QtWidgets.QMessageBox.information"):
+                view._handle_quarantine()
+
+        # Check file was moved
+        assert not dummy_file.exists()
+        assert (dest_dir / "zero.jpg").exists()
+        assert view._counts["dummies"] == 0
+        assert view._dummy_size == 0
+        assert view.table_model.get_item(0)["status"] == "quarantined"
+
+    def test_quarantine_dry_run_prompt_confirmation(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        from unittest.mock import patch
+        from PySide6.QtWidgets import QMessageBox
+
+        archive_dir = tmp_path / "archive2"
+        archive_dir.mkdir()
+        dummy_file = archive_dir / "zero2.jpg"
+        dummy_file.write_bytes(b"\x00" * 2048)
+
+        view = TriageView()
+        view.set_archive_path(archive_dir)
+        rec = {
+            "name": "zero2.jpg",
+            "path": str(dummy_file),
+            "size": 2048,
+            "status": "trim_zero",
+        }
+        view.add_file_record(rec)
+
+        dest_dir = tmp_path / "quarantine_target2"
+
+        # Mock dialog exec to accept with dry_run=True
+        def mock_exec(self_dlg):
+            self_dlg.dest_edit.setText(str(dest_dir))
+            self_dlg.chk_dry_run.setChecked(True)
+            return QDialog.DialogCode.Accepted
+
+        # 1. When user clicks "No" on the dry-run prompt -> files are not moved
+        with patch.object(QuarantineDialog, "exec", mock_exec):
+            with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.No):
+                view._handle_quarantine()
+
+        assert dummy_file.exists()
+        assert not dest_dir.exists()
+        assert view._counts["dummies"] == 1
+
+        # 2. When user clicks "Yes" on the dry-run prompt -> files ARE moved
+        with patch.object(QuarantineDialog, "exec", mock_exec):
+            with patch("PySide6.QtWidgets.QMessageBox.question", return_value=QMessageBox.StandardButton.Yes):
+                with patch("PySide6.QtWidgets.QMessageBox.information"):
+                    view._handle_quarantine()
+
+        assert not dummy_file.exists()
+        assert (dest_dir / "zero2.jpg").exists()
+        assert view._counts["dummies"] == 0
+        assert view.table_model.get_item(0)["status"] == "quarantined"
 
 
 class TestExportReport:

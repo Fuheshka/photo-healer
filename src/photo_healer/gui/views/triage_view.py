@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMessageBox,
+    QProgressDialog,
     QPushButton,
     QTableView,
     QVBoxLayout,
@@ -96,10 +97,11 @@ class QuarantineDialog(QDialog):
         dest_row.addWidget(self.btn_browse)
         layout.addLayout(dest_row)
 
-        # Dry-run checkbox
+        # Dry-run checkbox (unchecked by default so real quarantine moves files)
         self.chk_dry_run = QCheckBox(t("quarantine.dry_run"))
-        self.chk_dry_run.setChecked(True)  # Default safe mode
-        self.chk_dry_run.setStyleSheet("color: #60a5fa; font-size: 12px; font-weight: 500;")
+        self.chk_dry_run.setChecked(False)
+        self.chk_dry_run.setStyleSheet("color: #a1a1aa; font-size: 12px; font-weight: 500;")
+        self.chk_dry_run.toggled.connect(self._update_action_button)
         layout.addWidget(self.chk_dry_run)
 
         # Buttons
@@ -113,16 +115,37 @@ class QuarantineDialog(QDialog):
         )
         self.btn_cancel.clicked.connect(self.reject)
 
-        self.btn_ok = QPushButton(t("quarantine.btn_ok"))
-        self.btn_ok.setStyleSheet(
-            "background-color: #ef4444; color: #ffffff; border: none; "
-            "border-radius: 6px; padding: 7px 20px; font-size: 12px; font-weight: bold;"
-        )
+        self.btn_ok = QPushButton()
         self.btn_ok.clicked.connect(self.accept)
 
         btn_layout.addWidget(self.btn_cancel)
         btn_layout.addWidget(self.btn_ok)
         layout.addLayout(btn_layout)
+
+        self._update_action_button()
+
+    def _update_action_button(self) -> None:
+        """Update action button label and color dynamically depending on dry-run checkbox."""
+        if self.chk_dry_run.isChecked():
+            self.btn_ok.setText(t("quarantine.btn_simulate", default="Тестировать (моделирование)"))
+            self.btn_ok.setStyleSheet(
+                "QPushButton {"
+                "  background-color: #3b82f6; color: #ffffff; border: none; "
+                "  border-radius: 6px; padding: 7px 20px; font-size: 12px; font-weight: bold;"
+                "}"
+                "QPushButton:hover { background-color: #2563eb; }"
+                "QPushButton:pressed { background-color: #1d4ed8; }"
+            )
+        else:
+            self.btn_ok.setText(t("quarantine.btn_move", default="Переместить в карантин"))
+            self.btn_ok.setStyleSheet(
+                "QPushButton {"
+                "  background-color: #ef4444; color: #ffffff; border: none; "
+                "  border-radius: 6px; padding: 7px 20px; font-size: 12px; font-weight: bold;"
+                "}"
+                "QPushButton:hover { background-color: #dc2626; }"
+                "QPushButton:pressed { background-color: #b91c1c; }"
+            )
 
     def _browse_dest(self) -> None:
         folder = QFileDialog.getExistingDirectory(
@@ -308,20 +331,27 @@ class TriageView(QWidget):
 
     def add_file_record(self, record: dict[str, Any]) -> None:
         """Add single record and update live counters."""
-        self.table_model.add_item(record)
-        status = record.get("status", "error")
-        size = record.get("size", 0)
+        self.add_file_records([record])
 
-        self._counts["all"] += 1
-        if status == "healed_candidate":
-            self._counts["candidates"] += 1
-        elif status == "trim_zero":
-            self._counts["dummies"] += 1
-            self._dummy_size += size
-        elif status == "valid":
-            self._counts["intact"] += 1
-        else:
-            self._counts["errors"] += 1
+    def add_file_records(self, records: list[dict[str, Any]]) -> None:
+        """Batch add records and update live counters with a single UI refresh."""
+        if not records:
+            return
+        self.table_model.add_items(records)
+        for record in records:
+            status = record.get("status", "error")
+            size = record.get("size", 0)
+
+            self._counts["all"] += 1
+            if status == "healed_candidate":
+                self._counts["candidates"] += 1
+            elif status == "trim_zero":
+                self._counts["dummies"] += 1
+                self._dummy_size += size
+            elif status == "valid":
+                self._counts["intact"] += 1
+            else:
+                self._counts["errors"] += 1
 
         self._retranslate_ui()
 
@@ -371,14 +401,60 @@ class TriageView(QWidget):
         dest_dir = dlg.get_destination()
         is_dry_run = dlg.is_dry_run()
 
+        if is_dry_run:
+            prompt_msg = t(
+                "quarantine.dry_run_prompt",
+                count=len(dummy_items),
+                freed=format_size(total_dummy_size),
+            )
+            reply = QMessageBox.question(
+                self,
+                t("quarantine.title"),
+                prompt_msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.Yes,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.quarantine_performed.emit(
+                    {"moved": len(dummy_items), "skipped": 0, "freed": total_dummy_size, "dry_run": True}
+                )
+                return
+            # User wants to execute real move immediately after dry-run
+            is_dry_run = False
+
+        # Execute real quarantine relocation
+        try:
+            dest_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as e:
+            QMessageBox.critical(
+                self,
+                t("quarantine.title"),
+                t("quarantine.mkdir_error", error=str(e)),
+            )
+            return
+
+        progress = QProgressDialog(
+            t("quarantine.moving_progress"),
+            t("quarantine.btn_cancel"),
+            0,
+            len(dummy_items),
+            self,
+        )
+        progress.setWindowTitle(t("quarantine.title"))
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(200)
+
         moved = 0
         skipped = 0
         freed = 0
 
-        if not is_dry_run:
-            dest_dir.mkdir(parents=True, exist_ok=True)
+        norm_archive = self.current_archive_path.resolve() if self.current_archive_path else None
 
-        for item in dummy_items:
+        for idx, item in enumerate(dummy_items):
+            if progress.wasCanceled():
+                break
+
+            progress.setValue(idx)
             src = Path(item["path"])
             size = item.get("size", 0)
 
@@ -387,9 +463,9 @@ class TriageView(QWidget):
                 continue
 
             # Determine destination path preserving relative structure if possible
-            if self.current_archive_path:
+            if norm_archive:
                 try:
-                    rel = src.relative_to(self.current_archive_path)
+                    rel = src.resolve().relative_to(norm_archive)
                 except ValueError:
                     rel = Path(src.name)
             else:
@@ -397,39 +473,44 @@ class TriageView(QWidget):
 
             dst = dest_dir / rel
 
-            if is_dry_run:
+            # Collision prevention
+            if dst.exists():
+                stem = dst.stem
+                suffix = dst.suffix
+                c = 1
+                while dst.exists():
+                    dst = dst.parent / f"{stem}_{c}{suffix}"
+                    c += 1
+
+            try:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(src), str(dst))
                 moved += 1
                 freed += size
-            else:
-                dst.parent.mkdir(parents=True, exist_ok=True)
-                try:
-                    shutil.move(str(src), str(dst))
-                    moved += 1
-                    freed += size
-                    item["path"] = str(dst.resolve())
-                    item["status"] = "quarantined"
-                except OSError:
-                    skipped += 1
+                item["path"] = str(dst.resolve())
+                item["status"] = "quarantined"
+            except OSError:
+                skipped += 1
 
-        if is_dry_run:
-            msg = t(
-                "quarantine.dry_run_success",
-                moved=moved,
-                freed=format_size(freed),
-            )
-        else:
-            msg = t(
-                "quarantine.success",
-                moved=moved,
-                skipped=skipped,
-                freed=format_size(freed),
-            )
-            # Refresh view
-            self.table_model._on_language_changed(i18n.get_language())
+        progress.setValue(len(dummy_items))
+        progress.close()
 
+        # Update live counters and UI
+        self._counts["dummies"] = max(0, self._counts["dummies"] - moved)
+        self._dummy_size = max(0, self._dummy_size - freed)
+        self._retranslate_ui()
+        self.table_model.layoutChanged.emit()
+
+        msg = t(
+            "quarantine.success",
+            moved=moved,
+            skipped=skipped,
+            freed=format_size(freed),
+            dest=str(dest_dir),
+        )
         QMessageBox.information(self, t("quarantine.title"), msg)
         self.quarantine_performed.emit(
-            {"moved": moved, "skipped": skipped, "freed": freed, "dry_run": is_dry_run}
+            {"moved": moved, "skipped": skipped, "freed": freed, "dry_run": False}
         )
 
     def _handle_export_json(self) -> None:

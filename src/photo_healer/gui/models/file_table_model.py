@@ -27,6 +27,7 @@ from photo_healer.gui.i18n import i18n, t
 STATUS_COLORS: dict[str, str] = {
     "healed_candidate": "#22c55e",  # Green
     "trim_zero": "#ef4444",         # Red
+    "quarantined": "#60a5fa",       # Blue
     "valid": "#9ca3af",             # Slate gray
     "error": "#f59e0b",             # Amber
     "empty": "#f59e0b",             # Amber

@@ -30,13 +30,19 @@ import shutil
 import argparse
 from pathlib import Path
 
-# Fix Windows cp1251 console
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
-sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
+def ensure_utf8_io() -> None:
+    """Safely configure stdout/stderr for UTF-8 on Windows without breaking capture streams."""
+    if hasattr(sys.stdout, "reconfigure"):
+        try:
+            sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+            sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 
 CHUNK = 65536          # 64 KB streaming chunk
+ZERO_CHUNK = b"\x00" * CHUNK
 MAGIC = {
     ".jpg":  b"\xff\xd8\xff",
     ".jpeg": b"\xff\xd8\xff",
@@ -60,7 +66,7 @@ ERROR      = "error"
 
 # ── Core classifier ───────────────────────────────────────────────────────────
 
-def classify(path: Path) -> dict:
+def classify(path: Path, cached_size: int | None = None) -> dict:
     """
     Stream-reads path in 64 KB chunks.
     Returns a dict: path, size, status, first_nonzero, note.
@@ -69,11 +75,14 @@ def classify(path: Path) -> dict:
     result = {"path": str(path), "size": 0,
               "status": ERROR, "first_nonzero": -1, "note": ""}
 
-    try:
-        size = path.stat().st_size
-    except OSError as e:
-        result["note"] = str(e)
-        return result
+    if cached_size is not None:
+        size = cached_size
+    else:
+        try:
+            size = path.stat().st_size
+        except OSError as e:
+            result["note"] = str(e)
+            return result
 
     result["size"] = size
 
@@ -89,23 +98,21 @@ def classify(path: Path) -> dict:
         with open(path, "rb") as fh:
             offset = 0
             first_nonzero = -1
-            leading_zero = True   # still in the all-zero prefix
+            first_chunk = b""
 
             while True:
                 chunk = fh.read(CHUNK)
                 if not chunk:
                     break
-
-                # Scan chunk for non-zero bytes
-                for i, b in enumerate(chunk):
-                    if b != 0:
-                        first_nonzero = offset + i
-                        leading_zero = False
-                        break
-
-                if not leading_zero:
-                    break   # found data — stop streaming
-
+                if not first_chunk:
+                    first_chunk = chunk
+                if chunk == ZERO_CHUNK:
+                    offset += len(chunk)
+                    continue
+                trimmed = chunk.lstrip(b"\x00")
+                if trimmed:
+                    first_nonzero = offset + (len(chunk) - len(trimmed))
+                    break
                 offset += len(chunk)
 
     except OSError as e:
@@ -123,12 +130,7 @@ def classify(path: Path) -> dict:
     if first_nonzero == 0:
         # File starts with non-zero data — check magic
         if expected_magic:
-            # Re-read just the first few bytes for magic check
-            try:
-                with open(path, "rb") as fh:
-                    head = fh.read(len(expected_magic))
-            except OSError:
-                head = b""
+            head = first_chunk[:len(expected_magic)]
             if head == expected_magic:
                 result["status"] = VALID
                 result["note"] = "intact"
@@ -155,25 +157,41 @@ def classify(path: Path) -> dict:
 def scan(root: Path, exts: set[str]) -> list[dict]:
     results = []
     total = 0
+    candidate_entries: list[tuple[str, int]] = []
 
-    for dirpath, _, filenames in os.walk(root):
-        for fname in filenames:
-            if Path(fname).suffix.lower() not in exts:
-                continue
-            fpath = Path(dirpath) / fname
-            total += 1
-            r = classify(fpath)
-            results.append(r)
+    def scan_dir(dir_path: str) -> None:
+        try:
+            with os.scandir(dir_path) as it:
+                for entry in it:
+                    try:
+                        if entry.is_dir(follow_symlinks=False):
+                            scan_dir(entry.path)
+                        elif entry.is_file(follow_symlinks=False):
+                            dot_pos = entry.name.rfind(".")
+                            ext = entry.name[dot_pos:].lower() if dot_pos != -1 else ""
+                            if ext in exts:
+                                candidate_entries.append((entry.path, entry.stat().st_size))
+                    except OSError:
+                        continue
+        except OSError:
+            pass
 
-            if total % 200 == 0:
-                counts = _counts(results)
-                print(
-                    f"  [{total:>5}]  valid={counts.get(VALID,0):>4}  "
-                    f"trim={counts.get(TRIM_ZERO,0):>4}  "
-                    f"candidate={counts.get(CANDIDATE,0):>3}  "
-                    f"other={counts.get(OTHER,0):>3}",
-                    flush=True,
-                )
+    scan_dir(str(root))
+
+    for fpath_str, fsize in candidate_entries:
+        total += 1
+        r = classify(Path(fpath_str), cached_size=fsize)
+        results.append(r)
+
+        if total % 200 == 0:
+            counts = _counts(results)
+            print(
+                f"  [{total:>5}]  valid={counts.get(VALID,0):>4}  "
+                f"trim={counts.get(TRIM_ZERO,0):>4}  "
+                f"candidate={counts.get(CANDIDATE,0):>3}  "
+                f"other={counts.get(OTHER,0):>3}",
+                flush=True,
+            )
 
     return results
 
@@ -266,6 +284,7 @@ def quarantine(
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def main() -> None:
+    ensure_utf8_io()
     parser = argparse.ArgumentParser(
         description="Photo Healer Triage v2 — streaming TRIM-damage classifier"
     )

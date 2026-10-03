@@ -270,3 +270,62 @@ class TestTriageWorker:
         worker.run()
 
         assert sorted(found_names) == ["photo.jpg", "photo.png"]
+
+    def test_worker_batch_found_and_discovering(self, test_archive_dir: Path):
+        worker = TriageWorker(folder_path=test_archive_dir)
+        batches: list[list[dict[str, Any]]] = []
+        discovering_events: list[tuple[int, str]] = []
+
+        worker.batch_found.connect(batches.append)
+        worker.discovering.connect(lambda cnt, d: discovering_events.append((cnt, d)))
+
+        worker.run()
+
+        assert len(batches) >= 1
+        flat_records = [rec for b in batches for rec in b]
+        assert len(flat_records) == 4
+        assert any(r["status"] == "healed_candidate" for r in flat_records)
+        assert any(r["status"] == "trim_zero" for r in flat_records)
+        assert any(r["status"] == "valid" for r in flat_records)
+
+        assert len(discovering_events) >= 1
+        assert discovering_events[-1][0] >= 4
+
+    def test_fast_zero_chunk_audit(self, tmp_path: Path):
+        import time
+        # Create a 4MB TRIM-zero dummy file
+        trim_file = tmp_path / "large_trim.jpg"
+        trim_file.write_bytes(b"\x00" * (4 * 1024 * 1024))
+
+        t0 = time.perf_counter()
+        result = audit_file_streaming(str(trim_file), cached_size=4 * 1024 * 1024, cached_name="large_trim.jpg")
+        elapsed = time.perf_counter() - t0
+
+        assert result["status"] == "trim_zero"
+        assert result["first_nonzero"] == -1
+        assert elapsed < 0.05
+
+    def test_cli_classify_file_fast(self, test_archive_dir: Path):
+        from photo_healer.cli.main import classify_file
+        valid_rec = classify_file(test_archive_dir / "valid_01.jpg")
+        assert valid_rec["status"] == "valid"
+
+        trim_rec = classify_file(test_archive_dir / "trim_dummy.jpg")
+        assert trim_rec["status"] == "trim_zero"
+
+        cand_rec = classify_file(test_archive_dir / "candidate_01.jpg")
+        assert cand_rec["status"] == "healed_candidate"
+
+    def test_root_triage_script_fast(self, test_archive_dir: Path):
+        import triage
+        valid_rec = triage.classify(test_archive_dir / "valid_01.jpg")
+        assert valid_rec["status"] == "valid"
+
+        trim_rec = triage.classify(test_archive_dir / "trim_dummy.jpg")
+        assert trim_rec["status"] == "trim_zero"
+
+        cand_rec = triage.classify(test_archive_dir / "candidate_01.jpg")
+        assert cand_rec["status"] == "healed_candidate"
+
+        results = triage.scan(test_archive_dir, {".jpg"})
+        assert len(results) == 4
