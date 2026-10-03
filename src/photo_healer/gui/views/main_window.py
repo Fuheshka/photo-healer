@@ -46,6 +46,39 @@ QMainWindow, QWidget#centralWidget {
     color: #f4f4f5;
 }
 
+/* ── Menu Bar & Dropdowns ── */
+QMenuBar {
+    background-color: #18181b;
+    color: #f4f4f5;
+    border-bottom: 1px solid #27272a;
+    padding: 2px 6px;
+    font-size: 12px;
+}
+QMenuBar::item {
+    background-color: transparent;
+    padding: 4px 8px;
+    border-radius: 4px;
+}
+QMenuBar::item:selected {
+    background-color: #27272a;
+}
+QMenu {
+    background-color: #18181b;
+    color: #f4f4f5;
+    border: 1px solid #27272a;
+    border-radius: 6px;
+    padding: 4px;
+}
+QMenu::item {
+    padding: 6px 18px;
+    border-radius: 4px;
+    font-size: 12px;
+}
+QMenu::item:selected {
+    background-color: #2563eb;
+    color: #ffffff;
+}
+
 /* ── Top Bar & Panels ── */
 QFrame#topBar {
     background-color: #18181b;
@@ -245,6 +278,14 @@ class MainWindow(QMainWindow):
         i18n.language_changed.connect(self._retranslate_ui)
 
     def _init_ui(self) -> None:
+        # ── 0. Top Menu Bar ───────────────────────────────────────────────────
+        self.menu_bar = self.menuBar()
+        self.menu_tools = self.menu_bar.addMenu(t("menu.tools"))
+        self.act_fix_previews = self.menu_tools.addAction(t("tools.fix_previews"))
+        self.act_fix_previews.triggered.connect(self._open_fix_previews_dialog)
+        self.act_clear_cache = self.menu_tools.addAction(t("tools.clear_cache"))
+        self.act_clear_cache.triggered.connect(self._on_clear_cache_triggered)
+
         central_widget = QWidget(self)
         central_widget.setObjectName("centralWidget")
         self.setCentralWidget(central_widget)
@@ -389,6 +430,10 @@ class MainWindow(QMainWindow):
             if desc_k and desc_l:
                 desc_l.setText(t(desc_k))
 
+        self.menu_tools.setTitle(t("menu.tools"))
+        self.act_fix_previews.setText(t("tools.fix_previews"))
+        self.act_clear_cache.setText(t("tools.clear_cache"))
+
         self.lbl_metric_files.setText(t("metric.files", count=self._total_files))
         self.lbl_metric_size.setText(t("metric.total_size", size=format_size(self._total_bytes)))
 
@@ -399,6 +444,26 @@ class MainWindow(QMainWindow):
             self.combo_lang.blockSignals(True)
             self.combo_lang.setCurrentIndex(idx)
             self.combo_lang.blockSignals(False)
+
+    def _open_fix_previews_dialog(self) -> None:
+        """Open the thumbnail fix dialog."""
+        from photo_healer.gui.views.thumbnail_dialog import ThumbnailFixDialog
+        dlg = ThumbnailFixDialog(target_folder=self._selected_path, parent=self)
+        dlg.exec()
+
+    def _on_clear_cache_triggered(self) -> None:
+        """Trigger instant Windows Explorer icon and thumbnail cache reset."""
+        from photo_healer.core.thumbnail import clear_windows_thumbnail_cache
+        res = clear_windows_thumbnail_cache()
+        if res.get("success", False):
+            msg = t("thumb_dialog.cache_success")
+            self.lbl_status.setText(msg)
+            QMessageBox.information(self, t("app.title"), msg)
+        else:
+            err = "; ".join(res.get("errors", ["Unknown error"]))
+            msg = t("thumb_dialog.cache_error", error=err)
+            self.lbl_status.setText(msg)
+            QMessageBox.warning(self, t("app.title"), msg)
 
     def _on_language_switched(self, index: int) -> None:
         lang_code = self.combo_lang.itemData(index)

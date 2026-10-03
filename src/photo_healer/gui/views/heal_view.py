@@ -214,6 +214,12 @@ class HealView(QWidget):
         self.chk_pad_geometry.toggled.connect(self._on_pad_geometry_toggled)
         settings_layout.addWidget(self.chk_pad_geometry)
 
+        # strip_thumbnail checkbox
+        self.chk_strip_thumbnail = QCheckBox(t("heal.settings.strip_thumbnail"))
+        self.chk_strip_thumbnail.setChecked(True)
+        self.chk_strip_thumbnail.setToolTip(t("heal.settings.strip_thumbnail_tip"))
+        settings_layout.addWidget(self.chk_strip_thumbnail)
+
         # create_backup (.bak) checkbox
         self.chk_create_backup = QCheckBox(t("heal.settings.backup"))
         self.chk_create_backup.setChecked(True)
@@ -518,6 +524,8 @@ class HealView(QWidget):
         self.lbl_settings_section.setText(t("heal.settings.title"))
         self.chk_pad_geometry.setText(t("heal.settings.pad_geometry"))
         self.chk_pad_geometry.setToolTip(t("heal.settings.pad_geometry_tip"))
+        self.chk_strip_thumbnail.setText(t("heal.settings.strip_thumbnail"))
+        self.chk_strip_thumbnail.setToolTip(t("heal.settings.strip_thumbnail_tip"))
         self.chk_create_backup.setText(t("heal.settings.backup"))
         self.chk_create_backup.setToolTip(t("heal.settings.backup_tip"))
         self.btn_heal_single.setText(t("heal.action.heal_single"))
@@ -762,6 +770,7 @@ class HealView(QWidget):
             donor_path=donor,
             auto_donor=False,
             pad_geometry=self.chk_pad_geometry.isChecked(),
+            strip_thumbnail=self.chk_strip_thumbnail.isChecked(),
             create_backup=self.chk_create_backup.isChecked(),
             output_dir=out_dest.parent,
             archive_root=self.archive_root,
@@ -809,6 +818,7 @@ class HealView(QWidget):
             donor_path=donor,
             auto_donor=self.chk_auto_donor.isChecked(),
             pad_geometry=self.chk_pad_geometry.isChecked(),
+            strip_thumbnail=self.chk_strip_thumbnail.isChecked(),
             create_backup=self.chk_create_backup.isChecked(),
             archive_root=self.archive_root,
             parent=self,

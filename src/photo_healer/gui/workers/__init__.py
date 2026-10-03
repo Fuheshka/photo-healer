@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from photo_healer.gui.workers.heal_worker import HealWorker, find_matching_donor
+from photo_healer.gui.workers.thumbnail_worker import ThumbnailWorker
 from photo_healer.gui.workers.triage_worker import TriageWorker
 
-__all__ = ["TriageWorker", "HealWorker", "find_matching_donor"]
+__all__ = ["TriageWorker", "HealWorker", "ThumbnailWorker", "find_matching_donor"]

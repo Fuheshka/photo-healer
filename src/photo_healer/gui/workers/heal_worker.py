@@ -166,6 +166,7 @@ class HealWorker(QThread):
         output_dir: Path | str | None = None,
         inplace: bool = False,
         archive_root: Path | str | None = None,
+        strip_thumbnail: bool = True,
         parent: QObject | None = None,
     ) -> None:
         super().__init__(parent)
@@ -177,6 +178,7 @@ class HealWorker(QThread):
         self.output_dir = Path(output_dir) if output_dir else None
         self.inplace = inplace
         self.archive_root = Path(archive_root) if archive_root else None
+        self.strip_thumbnail = strip_thumbnail
         self._is_stopped = False
 
     def stop(self) -> None:
@@ -281,9 +283,14 @@ class HealWorker(QThread):
                 # Check restart markers for StreamResync
                 markers = StreamResync.scan_restart_markers(cand_bytes)
                 if markers and len(markers) >= 2:
+                    donor_for_resync = (
+                        HeaderSplicer.strip_donor_thumbnails(donor_hdr)
+                        if self.strip_thumbnail
+                        else donor_hdr
+                    )
                     resync_res = StreamResync.resync_stream(
                         cand_bytes,
-                        donor_file,
+                        donor=donor_for_resync,
                         pad_geometry=self.pad_geometry,
                     )
                     if resync_res.status == "resynced" or resync_res.total_markers_found > 0:
@@ -295,7 +302,7 @@ class HealWorker(QThread):
                     offset = EntropyAnalyzer.detect_entropy_start(cand_bytes)
                     if offset is None:
                         offset = next((i for i, b in enumerate(cand_bytes) if b != 0), 65536)
-                    splicer = HeaderSplicer(donor_hdr)
+                    splicer = HeaderSplicer(donor_hdr, strip_thumbnail=self.strip_thumbnail)
                     splice_res = splicer.splice_target(cand_bytes, entropy_offset=offset)
                     healed_bytes = splice_res.data
                     method_used = f"splice (offset={splice_res.entropy_offset})"

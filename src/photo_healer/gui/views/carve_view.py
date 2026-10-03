@@ -284,6 +284,12 @@ class CarveView(QWidget):
         self.btn_export_all.clicked.connect(self.on_export_all)
         toolbar.addWidget(self.btn_export_all)
 
+        # Fix Previews Button
+        self.btn_fix_previews = QPushButton(t("carve.btn.fix_previews"))
+        self.btn_fix_previews.setObjectName("btnActionSec")
+        self.btn_fix_previews.clicked.connect(self._open_fix_previews_dialog)
+        toolbar.addWidget(self.btn_fix_previews)
+
         root_layout.addLayout(toolbar)
 
         # ── 2. Scrollable Grid Area ───────────────────────────────────────────
@@ -609,6 +615,12 @@ class CarveView(QWidget):
             t("carve.export.success", count=len(exported), path=chosen),
         )
 
+    def _open_fix_previews_dialog(self) -> None:
+        """Open the thumbnail fix dialog with the current archive folder prefilled."""
+        from photo_healer.gui.views.thumbnail_dialog import ThumbnailFixDialog
+        dlg = ThumbnailFixDialog(target_folder=self._archive_path, parent=self)
+        dlg.exec()
+
     def _retranslate_ui(self) -> None:
         """Reactively translate all labels and buttons on language change."""
         if self._worker and self._worker.isRunning():
@@ -620,6 +632,7 @@ class CarveView(QWidget):
         self.btn_deselect_all.setText(t("carve.btn.deselect_all"))
         self.btn_export_selected.setText(t("carve.btn.export_selected"))
         self.btn_export_all.setText(t("carve.btn.export_all"))
+        self.btn_fix_previews.setText(t("carve.btn.fix_previews"))
 
         self.txt_search.setPlaceholderText(t("carve.search.placeholder"))
         self.lbl_empty.setText(t("carve.status.empty"))
