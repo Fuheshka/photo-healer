@@ -3,11 +3,12 @@
 """Photo Healer CLI — Unified command-line interface for SSD TRIM photo forensics.
 
 Provides five ergonomic commands:
-  triage      - Fast streaming audit and classification of archive folders
-  heal        - Single-photo header transplantation with donor JPEG
-  batch-heal  - Batch recovery of photo series with auto-donor matching
-  quarantine  - Safe relocation of 100% TRIM-erased zero files
-  carve       - Extraction of embedded previews (MPF, EXIF thumbnails, raw streams)
+  triage        - Fast streaming audit and classification of archive folders
+  heal          - Single-photo header transplantation with donor JPEG
+  batch-heal    - Batch recovery of photo series with auto-donor matching
+  quarantine    - Safe relocation of 100% TRIM-erased zero files
+  carve         - Extraction of embedded previews (MPF, EXIF thumbnails, raw streams)
+  fix-previews  - Strip legacy donor thumbnails or rebuild honest EXIF IFD1 previews
 """
 
 from __future__ import annotations
@@ -17,6 +18,7 @@ import json
 import os
 import shutil
 import sys
+import time
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -26,6 +28,11 @@ from photo_healer.core.entropy import EntropyAnalyzer
 from photo_healer.core.splicer import HeaderSplicer
 from photo_healer.core.validator import JpegValidator
 from photo_healer.core.carver import ThumbnailCarver, CarvedPreview
+from photo_healer.core.thumbnail import (
+    clear_windows_thumbnail_cache,
+    process_directory,
+    process_file,
+)
 from photo_healer.cli.banner import show_banner
 from photo_healer.cli.i18n import (
     SUPPORTED_LANGUAGES,
@@ -878,6 +885,110 @@ def handle_carve(args: argparse.Namespace) -> int:
     return 0
 
 
+def handle_fix_previews(args: argparse.Namespace) -> int:
+    """Batch strip legacy donor thumbnails or rebuild honest EXIF IFD1 previews, and reset Windows icon cache."""
+    target_path = getattr(args, "path", None)
+    clear_cache = getattr(args, "clear_cache", False)
+
+    if not target_path and not clear_cache:
+        sys.stderr.write(t("fix_previews.error.missing_target", default="Error: Path to file or folder is required.") + "\n")
+        return 1
+
+    mode = getattr(args, "mode", "strip")
+    size_str = getattr(args, "size", "160x120")
+    try:
+        w_str, h_str = size_str.lower().split("x")
+        thumb_size = (int(w_str), int(h_str))
+    except Exception:
+        sys.stderr.write(t("fix_previews.error.invalid_size", size=size_str, default=f"Error: Invalid size format: '{size_str}'. Use WIDTHxHEIGHT, e.g. 160x120.") + "\n")
+        return 1
+
+    dry_run = getattr(args, "dry_run", False)
+    backup = getattr(args, "backup", False)
+    force = getattr(args, "force", False)
+    quiet = getattr(args, "quiet", False)
+    lang = getattr(args, "lang", None) or get_language()
+
+    start_time = time.time()
+    results = []
+
+    if target_path:
+        target = Path(target_path)
+        if not target.exists():
+            sys.stderr.write(t("fix_previews.error.path_not_found", path=target, default=f"Error: Target path does not exist: {target}") + "\n")
+            return 1
+
+        if not quiet:
+            mode_desc = (
+                t("fix_previews.mode.strip", default="Stripping legacy thumbnails", lang=lang)
+                if mode == "strip"
+                else t("fix_previews.mode.rebuild", w=thumb_size[0], h=thumb_size[1], default=f"Rebuilding honest thumbnails ({thumb_size[0]}x{thumb_size[1]})", lang=lang)
+            )
+            print(t("fix_previews.info.starting", mode=mode_desc, target=target, default=f"Starting preview fix [{mode_desc}] on: {target}", lang=lang))
+
+        if target.is_file():
+            files = [target]
+        else:
+            files = sorted([p for p in target.rglob("*") if p.is_file() and p.suffix.lower() in (".jpg", ".jpeg")])
+
+        if not files:
+            if not quiet:
+                print(t("fix_previews.info.no_files", target=target, default=f"No JPEG images found in {target}.", lang=lang))
+        else:
+            progress = ProgressBar(len(files), prefix=t("fix_previews.progress.prefix", default="Fixing previews", lang=lang), quiet=quiet)
+            for f in files:
+                res = process_file(
+                    file_path=f,
+                    mode=mode,
+                    size=thumb_size,
+                    dry_run=dry_run,
+                    backup=backup,
+                    force=force,
+                )
+                results.append(res)
+                progress.update(1, f.name)
+            progress.finish()
+
+    if clear_cache:
+        if not quiet:
+            print(t("fix_previews.info.clearing_cache", default="Resetting Windows icon and thumbnail cache...", lang=lang))
+        cache_res = clear_windows_thumbnail_cache()
+        if not quiet:
+            if cache_res.get("success"):
+                actions_str = ", ".join(cache_res.get("actions", []))
+                cleared_files = cache_res.get("files_cleared", 0)
+                print(t("fix_previews.info.cache_cleared", actions=actions_str, cleared=cleared_files, default=f"Windows cache reset successful ({actions_str}, {cleared_files} files cleared).", lang=lang))
+            else:
+                err_str = "; ".join(cache_res.get("errors", []))
+                print(t("fix_previews.warn.cache_failed", errors=err_str, default=f"Warning: Cache reset had issues: {err_str}", lang=lang))
+
+    elapsed = time.time() - start_time
+
+    if not quiet and target_path:
+        total_files = len(results)
+        modified_count = sum(1 for r in results if r.status in ("stripped", "rebuilt"))
+        skipped_count = sum(1 for r in results if r.status == "skipped")
+        error_count = sum(1 for r in results if r.status == "error")
+        total_freed = sum(r.bytes_freed for r in results)
+
+        action_name = t("metric.processed_dry_run", default="Processed (dry-run)", lang=lang) if dry_run else t("metric.processed_success", default="Processed successfully", lang=lang)
+        freed_label = t("metric.space_freed", default="Space freed", lang=lang) if mode == "strip" else t("metric.size_delta", default="Size change", lang=lang)
+
+        table_rows = [
+            [t("metric.total_scanned", default="Total files scanned", lang=lang), str(total_files), "-"],
+            [action_name, str(modified_count), format_size(total_freed)],
+            [t("metric.skipped", default="Skipped", lang=lang), str(skipped_count), "-"],
+            [t("metric.errors", default="Errors", lang=lang), str(error_count), "-"],
+            [t("metric.elapsed_time", default="Elapsed time", lang=lang), f"{elapsed:.2f} s", "-"],
+            [freed_label, "-", format_size(total_freed)],
+        ]
+        headers = [t("table.header.metric", default="Metric", lang=lang), t("table.header.count", default="Count", lang=lang), t("table.header.size", default="Size / Time", lang=lang)]
+        title = t("table.title.fix_previews", default="PHOTO HEALER — FIX PREVIEWS SUMMARY", lang=lang)
+        print(render_table(title, headers, table_rows))
+
+    return 0 if not any(r.status == "error" for r in results) else 1
+
+
 def handle_gui(args: argparse.Namespace) -> int:
     """Launch the GUI application with PySide6 dependency verification."""
     try:
@@ -1100,7 +1211,61 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_carve.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
     p_carve.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
 
-    # 6. gui
+    # 6. fix-previews
+    p_fix = subparsers.add_parser(
+        "fix-previews",
+        help=t("cmd.fix_previews.help", lang=lang, default="Batch fix or strip embedded photo previews and reset Windows icon cache"),
+        description=t("cmd.fix_previews.desc", lang=lang, default="Batch strip legacy donor thumbnails or rebuild honest EXIF IFD1 previews from actual image frame, and reset Windows icon cache."),
+    )
+    p_fix.add_argument("path", nargs="?", help=t("fix_previews.arg.path", lang=lang, default="File or directory path to fix thumbnails"))
+    p_fix.add_argument(
+        "--mode",
+        choices=["strip", "rebuild"],
+        default="strip",
+        help=t("fix_previews.arg.mode", lang=lang, default="Operation mode: 'strip' (instant header removal) or 'rebuild' (generate honest IFD1 thumbnails)"),
+    )
+    p_fix.add_argument(
+        "--size",
+        default="160x120",
+        help=t("fix_previews.arg.size", lang=lang, default="Thumbnail resolution for rebuild mode (e.g. 160x120 or 320x240; default: 160x120)"),
+    )
+    p_fix.add_argument(
+        "--clear-cache",
+        action="store_true",
+        help=t("fix_previews.arg.clear_cache", lang=lang, default="Safely reset Windows Explorer icon and thumbnail cache"),
+    )
+    p_fix.add_argument(
+        "--dry-run",
+        action="store_true",
+        help=t("fix_previews.arg.dry_run", lang=lang, default="Simulate preview fixing without modifying files"),
+    )
+    p_fix.add_argument(
+        "--backup",
+        action="store_true",
+        help=t("fix_previews.arg.backup", lang=lang, default="Create .bak backup before modifying files in place"),
+    )
+    p_fix.add_argument(
+        "--force",
+        action="store_true",
+        help=t("fix_previews.arg.force", lang=lang, default="Force overwrite existing backup files"),
+    )
+    p_fix.add_argument(
+        "--quiet",
+        action="store_true",
+        help=t("fix_previews.arg.quiet", lang=lang, default="Suppress progress and summary output"),
+    )
+    p_fix.add_argument(
+        "--no-banner",
+        action="store_true",
+        help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"),
+    )
+    p_fix.add_argument(
+        "--lang",
+        choices=list(SUPPORTED_LANGUAGES),
+        help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"),
+    )
+
+    # 7. gui
     p_gui = subparsers.add_parser(
         "gui",
         help=t("cmd.gui.help", lang=lang, default="Launch Photo Healer graphical desktop application"),
@@ -1110,7 +1275,7 @@ def build_parser(lang: str | None = None) -> argparse.ArgumentParser:
     p_gui.add_argument("--lang", choices=list(SUPPORTED_LANGUAGES), help=t("cli.arg.lang", lang=lang, default="Interface language (en, ru)"))
     p_gui.add_argument("--no-banner", action="store_true", help=t("cli.arg.no_banner", lang=lang, default="Suppress terminal splash screen and ASCII banner"))
 
-    # 7. update-check
+    # 8. update-check
     p_update = subparsers.add_parser(
         "update-check",
         help=t("cmd.update_check.help", lang=lang, default="Check for newer Photo Healer releases on GitHub"),
@@ -1174,6 +1339,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         exit_code = handle_quarantine(args)
     elif args.command == "carve":
         exit_code = handle_carve(args)
+    elif args.command == "fix-previews":
+        exit_code = handle_fix_previews(args)
     elif args.command == "gui":
         return handle_gui(args)
     elif args.command == "update-check":
