@@ -420,8 +420,8 @@ class TestCliUpdateCheckCommand:
         monkeypatch.setattr("photo_healer.cli.updater.DEFAULT_CACHE_FILE", temp_cache_file)
         mock_response = io.BytesIO(
             json.dumps({
-                "tag_name": "v0.9.0",
-                "html_url": "https://github.com/fuheshka/photo-healer/releases/tag/v0.9.0",
+                "tag_name": "v99.0.0",
+                "html_url": "https://github.com/fuheshka/photo-healer/releases/tag/v99.0.0",
                 "assets": [],
             }).encode("utf-8")
         )
@@ -432,12 +432,13 @@ class TestCliUpdateCheckCommand:
 
         assert code == 0
         captured = capsys.readouterr()
-        assert "0.9.0" in captured.out or "0.9.0" in captured.err
+        assert "99.0.0" in captured.out or "99.0.0" in captured.err
 
     def test_cli_update_check_up_to_date(self, temp_cache_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+        from photo_healer import __version__
         monkeypatch.setattr("photo_healer.cli.updater.DEFAULT_CACHE_FILE", temp_cache_file)
         mock_response = io.BytesIO(
-            json.dumps({"tag_name": "v0.2.0", "html_url": "https://example.com", "assets": []}).encode("utf-8")
+            json.dumps({"tag_name": f"v{__version__}", "html_url": "https://example.com", "assets": []}).encode("utf-8")
         )
         mock_response.status = 200
 
@@ -449,9 +450,10 @@ class TestCliUpdateCheckCommand:
         assert "latest version" in captured.out
 
     def test_cli_update_check_quiet_flag(self, temp_cache_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+        from photo_healer import __version__
         monkeypatch.setattr("photo_healer.cli.updater.DEFAULT_CACHE_FILE", temp_cache_file)
         mock_response = io.BytesIO(
-            json.dumps({"tag_name": "v0.2.0", "html_url": "https://example.com", "assets": []}).encode("utf-8")
+            json.dumps({"tag_name": f"v{__version__}", "html_url": "https://example.com", "assets": []}).encode("utf-8")
         )
         mock_response.status = 200
 
@@ -463,9 +465,10 @@ class TestCliUpdateCheckCommand:
         assert captured.out == ""
 
     def test_cli_update_check_russian(self, temp_cache_file: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]):
+        from photo_healer import __version__
         monkeypatch.setattr("photo_healer.cli.updater.DEFAULT_CACHE_FILE", temp_cache_file)
         mock_response = io.BytesIO(
-            json.dumps({"tag_name": "v0.2.0", "html_url": "https://example.com", "assets": []}).encode("utf-8")
+            json.dumps({"tag_name": f"v{__version__}", "html_url": "https://example.com", "assets": []}).encode("utf-8")
         )
         mock_response.status = 200
 
