@@ -326,6 +326,15 @@ class TriageView(QWidget):
     def _on_filter_clicked(self, category: str) -> None:
         self.proxy_model.set_category_filter(category)
 
+    def suspend_sorting(self) -> None:
+        """Suspend dynamic sorting during bulk ingestion to prevent UI freezes and event loop saturation."""
+        self.proxy_model.setDynamicSortFilter(False)
+
+    def resume_sorting(self) -> None:
+        """Re-enable dynamic sorting and refresh proxy view."""
+        self.proxy_model.setDynamicSortFilter(True)
+        self.proxy_model.invalidate()
+
     def set_archive_path(self, path: Path | str | None) -> None:
         self.current_archive_path = Path(path) if path else None
 

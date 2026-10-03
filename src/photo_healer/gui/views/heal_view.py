@@ -61,6 +61,7 @@ class HealView(QWidget):
         self.current_candidate: Path | None = None
         self._manual_donor_path: Path | None = None
         self.worker: HealWorker | None = None
+        self._candidate_paths_set: set[str] = set()
 
         self._init_ui()
         self._apply_styling()
@@ -612,23 +613,33 @@ class HealView(QWidget):
     def set_archive_path(self, path: Path | str | None) -> None:
         self.archive_root = Path(path) if path else None
 
-    def add_candidate(self, file_path: Path | str, select: bool = True) -> None:
-        """Add a single candidate file to the queue."""
-        p = Path(file_path).resolve()
-        if not p.is_file():
+    def add_candidate(self, file_path: Path | str, select: bool = True, size: int | None = None) -> None:
+        """Add a single candidate file to the queue with O(1) duplicate checks and cached size."""
+        str_p = str(file_path)
+        if str_p in self._candidate_paths_set:
+            if select:
+                for i in range(self.list_candidates.count()):
+                    item = self.list_candidates.item(i)
+                    if item.data(Qt.ItemDataRole.UserRole) == str_p:
+                        self.list_candidates.setCurrentItem(item)
+                        break
             return
 
-        # Check duplicates
-        for i in range(self.list_candidates.count()):
-            item = self.list_candidates.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == str(p):
-                if select:
-                    self.list_candidates.setCurrentItem(item)
+        p = Path(str_p)
+        if size is None:
+            try:
+                resolved_p = p.resolve()
+                if not resolved_p.is_file():
+                    return
+                size = resolved_p.stat().st_size
+                str_p = str(resolved_p)
+            except OSError:
                 return
 
-        size_str = format_size(p.stat().st_size)
+        self._candidate_paths_set.add(str_p)
+        size_str = format_size(size)
         item = QListWidgetItem(f"{p.name} ({size_str})")
-        item.setData(Qt.ItemDataRole.UserRole, str(p))
+        item.setData(Qt.ItemDataRole.UserRole, str_p)
         self.list_candidates.addItem(item)
 
         self.lbl_queue_count.setText(t("heal.queue.count", count=self.list_candidates.count()))
@@ -653,6 +664,7 @@ class HealView(QWidget):
 
     def clear_candidates(self) -> None:
         """Clear candidate queue and preview."""
+        self._candidate_paths_set.clear()
         self.list_candidates.clear()
         self.current_candidate = None
         self.lbl_queue_count.setText(t("heal.queue.count", count=0))

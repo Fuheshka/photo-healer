@@ -66,20 +66,32 @@ ERROR      = "error"
 
 # ── Core classifier ───────────────────────────────────────────────────────────
 
-def classify(path: Path, cached_size: int | None = None) -> dict:
+def classify(
+    path: Path | str,
+    cached_size: int | None = None,
+    cached_name: str | None = None,
+) -> dict:
     """
     Stream-reads path in 64 KB chunks.
-    Returns a dict: path, size, status, first_nonzero, note.
+    Returns a dict: path, name, size, status, first_nonzero, note.
     Never loads the whole file into memory.
     """
-    result = {"path": str(path), "size": 0,
-              "status": ERROR, "first_nonzero": -1, "note": ""}
+    str_path = str(path)
+    name = cached_name or (path.name if isinstance(path, Path) else os.path.basename(str_path))
+    result = {
+        "path": str(path.resolve()) if isinstance(path, Path) and cached_name is None else str_path,
+        "name": name,
+        "size": 0,
+        "status": ERROR,
+        "first_nonzero": -1,
+        "note": "",
+    }
 
     if cached_size is not None:
         size = cached_size
     else:
         try:
-            size = path.stat().st_size
+            size = (path if isinstance(path, Path) else Path(str_path)).stat().st_size
         except OSError as e:
             result["note"] = str(e)
             return result
@@ -91,20 +103,21 @@ def classify(path: Path, cached_size: int | None = None) -> dict:
         result["note"] = "zero-length file"
         return result
 
-    ext = path.suffix.lower()
+    dot_pos = name.rfind(".")
+    ext = name[dot_pos:].lower() if dot_pos != -1 else ""
     expected_magic = MAGIC.get(ext)
 
     try:
-        with open(path, "rb") as fh:
+        with open(str_path, "rb") as fh:
             offset = 0
             first_nonzero = -1
-            first_chunk = b""
+            first_chunk: bytes | None = None
 
             while True:
                 chunk = fh.read(CHUNK)
                 if not chunk:
                     break
-                if not first_chunk:
+                if first_chunk is None:
                     first_chunk = chunk
                 if chunk == ZERO_CHUNK:
                     offset += len(chunk)
@@ -130,7 +143,7 @@ def classify(path: Path, cached_size: int | None = None) -> dict:
     if first_nonzero == 0:
         # File starts with non-zero data — check magic
         if expected_magic:
-            head = first_chunk[:len(expected_magic)]
+            head = (first_chunk or b"")[:len(expected_magic)]
             if head == expected_magic:
                 result["status"] = VALID
                 result["note"] = "intact"
@@ -157,7 +170,8 @@ def classify(path: Path, cached_size: int | None = None) -> dict:
 def scan(root: Path, exts: set[str]) -> list[dict]:
     results = []
     total = 0
-    candidate_entries: list[tuple[str, int]] = []
+    resolved_root = root.resolve()
+    candidate_entries: list[tuple[str, str, int]] = []
 
     def scan_dir(dir_path: str) -> None:
         try:
@@ -167,20 +181,25 @@ def scan(root: Path, exts: set[str]) -> list[dict]:
                         if entry.is_dir(follow_symlinks=False):
                             scan_dir(entry.path)
                         elif entry.is_file(follow_symlinks=False):
-                            dot_pos = entry.name.rfind(".")
-                            ext = entry.name[dot_pos:].lower() if dot_pos != -1 else ""
+                            name = entry.name
+                            dot_pos = name.rfind(".")
+                            ext = name[dot_pos:].lower() if dot_pos != -1 else ""
                             if ext in exts:
-                                candidate_entries.append((entry.path, entry.stat().st_size))
+                                try:
+                                    sz = entry.stat(follow_symlinks=False).st_size
+                                except OSError:
+                                    sz = 0
+                                candidate_entries.append((entry.path, name, sz))
                     except OSError:
                         continue
         except OSError:
             pass
 
-    scan_dir(str(root))
+    scan_dir(str(resolved_root))
 
-    for fpath_str, fsize in candidate_entries:
+    for fpath_str, fname, fsize in candidate_entries:
         total += 1
-        r = classify(Path(fpath_str), cached_size=fsize)
+        r = classify(fpath_str, cached_size=fsize, cached_name=fname)
         results.append(r)
 
         if total % 200 == 0:

@@ -65,7 +65,8 @@ def audit_file_streaming(
         result["note"] = "Zero-length file"
         return result
 
-    ext = os.path.splitext(name)[1].lower()
+    dot_pos = name.rfind(".")
+    ext = name[dot_pos:].lower() if dot_pos != -1 else ""
     expected_magic = IMAGE_MAGICS.get(ext)
 
     try:
@@ -81,7 +82,7 @@ def audit_file_streaming(
                     first_chunk = chunk
 
                 # Fast C-level zero-check: 270x faster than pure-Python byte loops
-                if chunk == ZERO_CHUNK or chunk == b"\x00" * len(chunk):
+                if chunk == ZERO_CHUNK:
                     offset += len(chunk)
                     continue
 
@@ -193,8 +194,10 @@ class TriageWorker(QThread):
 
         # 1. Fast discovery using recursive os.scandir with cached stats (60x faster than os.walk + Path.stat)
         candidate_entries: list[tuple[str, str, int]] = []
+        last_discovery_time = 0.0
 
         def scan_dir(dir_path: str) -> bool:
+            nonlocal last_discovery_time
             if self._is_stopped or self.isInterruptionRequested():
                 return False
             try:
@@ -205,15 +208,18 @@ class TriageWorker(QThread):
                         try:
                             if entry.is_file(follow_symlinks=False):
                                 name = entry.name
-                                ext = os.path.splitext(name)[1].lower()
+                                dot_pos = name.rfind(".")
+                                ext = name[dot_pos:].lower() if dot_pos != -1 else ""
                                 if ext in self.extensions:
                                     try:
                                         sz = entry.stat(follow_symlinks=False).st_size
                                     except OSError:
                                         sz = 0
                                     candidate_entries.append((entry.path, name, sz))
-                                    if len(candidate_entries) % 500 == 0:
+                                    now = time.perf_counter()
+                                    if len(candidate_entries) % 100 == 0 or (now - last_discovery_time >= 0.05):
                                         self.discovering.emit(len(candidate_entries), dir_path)
+                                        last_discovery_time = now
                             elif entry.is_dir(follow_symlinks=False):
                                 if not scan_dir(entry.path):
                                     return False
@@ -278,7 +284,8 @@ class TriageWorker(QThread):
         if batch:
             self.batch_found.emit(batch)
 
-        if total_files > 50:
-            self.progress.emit(summary["scanned_files"], total_files, candidate_entries[-1][1])
+        if total_files > 50 and candidate_entries and summary["scanned_files"] > 0:
+            last_scanned_name = candidate_entries[summary["scanned_files"] - 1][1]
+            self.progress.emit(summary["scanned_files"], total_files, last_scanned_name)
 
         self.finished.emit(summary)

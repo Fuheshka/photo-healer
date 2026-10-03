@@ -644,7 +644,7 @@ class MainWindow(QMainWindow):
         self.progress_bar.setRange(0, 0)  # indeterminate until total is known
 
         # Suspend dynamic sorting on triage table while loading large volume of files
-        self.triage_view.proxy_model.setDynamicSortFilter(False)
+        self.triage_view.suspend_sorting()
 
         # Launch background worker
         self.worker = TriageWorker(folder, parent=self)
@@ -659,8 +659,7 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText(t("status.cancelled", count=self._total_files))
             self.worker.stop()
             self.btn_scan.setEnabled(False)
-            self.triage_view.proxy_model.setDynamicSortFilter(True)
-            self.triage_view.proxy_model.invalidate()
+            self.triage_view.resume_sorting()
 
     def _on_worker_discovering(self, count: int, current_dir: str) -> None:
         self.lbl_status.setText(t("status.discovering", count=count, folder=current_dir))
@@ -695,6 +694,7 @@ class MainWindow(QMainWindow):
                 self.heal_view.add_candidate(
                     record["path"],
                     select=(self.heal_view.current_candidate is None),
+                    size=record.get("size"),
                 )
 
         self.lbl_metric_files.setText(t("metric.files", count=self._total_files))
@@ -702,8 +702,7 @@ class MainWindow(QMainWindow):
 
     def _on_worker_finished(self, summary: dict[str, Any]) -> None:
         # Re-enable dynamic sorting and refresh proxy view
-        self.triage_view.proxy_model.setDynamicSortFilter(True)
-        self.triage_view.proxy_model.invalidate()
+        self.triage_view.resume_sorting()
 
         self.progress_bar.setVisible(False)
         self.btn_scan.setText(t("folder.scan"))
